@@ -285,11 +285,32 @@ class DatabaseManager:
             rc, _, _ = self._run(f"systemctl start {svc} 2>/dev/null")
             if rc == 0:
                 self._run(f"systemctl enable {svc}")
+                # Configure root for password auth so PHP apps can connect
+                self._configure_mysql_root_auth()
                 self.log.success(f"{preferred} installed and started")
                 return True
 
         self.log.warn(f"{preferred} installed but could not start service")
         return True
+
+    def _configure_mysql_root_auth(self):
+        """
+        Configure MySQL root user for password-based auth.
+
+        By default, MySQL 8 on Ubuntu uses auth_socket for root,
+        which prevents PHP apps from connecting as root@localhost.
+        Switch to mysql_native_password with empty password so apps
+        can connect without special socket permissions.
+        """
+        rc, _, _ = self._run(
+            'mysql -u root -e "'
+            "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '';"
+            ' FLUSH PRIVILEGES;"'
+        )
+        if rc == 0:
+            self.log.info("Configured MySQL root for password-based auth")
+        else:
+            self.log.warn("Could not configure MySQL root auth — apps may need manual DB user setup")
 
     def _ensure_postgresql(self, installed_dbs: Dict) -> bool:
         """

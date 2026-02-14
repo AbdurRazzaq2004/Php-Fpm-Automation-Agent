@@ -98,12 +98,17 @@ server {{
 
         fastcgi_pass unix:{fpm_socket};
         fastcgi_index index.php;
-        fastcgi_split_path_info ^(.+\\.php)(/.+)$;
+
+        # Extract original URI path for PATH_INFO (strip query string)
+        set $path_info $request_uri;
+        if ($path_info ~ "^([^?]*)") {{
+            set $path_info $1;
+        }}
 
         # FastCGI parameters
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_param PATH_INFO $path_info;
         fastcgi_param DOCUMENT_ROOT $document_root;
 
         # FastCGI tuning
@@ -235,10 +240,16 @@ server {{
         try_files $uri =404;
         fastcgi_pass unix:{fpm_socket};
         fastcgi_index index.php;
-        fastcgi_split_path_info ^(.+\\.php)(/.+)$;
+
+        # Extract original URI path for PATH_INFO (strip query string)
+        set $path_info $request_uri;
+        if ($path_info ~ "^([^?]*)") {{
+            set $path_info $1;
+        }}
+
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_param PATH_INFO $path_info;
         fastcgi_param DOCUMENT_ROOT $document_root;
         fastcgi_connect_timeout 60s;
         fastcgi_send_timeout 300s;

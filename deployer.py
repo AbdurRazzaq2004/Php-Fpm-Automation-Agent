@@ -385,14 +385,16 @@ class PHPDeployer:
                     for sql_file in sql_files:
                         fname = os.path.basename(sql_file)
                         log.info(f"Importing SQL: {fname}")
+                        # Use cat | psql instead of psql -f to avoid permission issues
+                        # (postgres user can't read files owned by svc_* users)
                         if pgsql_db:
                             rc = _sp.run(
-                                f"sudo -u postgres psql -d {pgsql_db} -f '{sql_file}'",
+                                f"cat '{sql_file}' | sudo -u postgres psql -d {pgsql_db}",
                                 shell=True, capture_output=True
                             )
                         else:
                             rc = _sp.run(
-                                f"sudo -u postgres psql -f '{sql_file}'",
+                                f"cat '{sql_file}' | sudo -u postgres psql",
                                 shell=True, capture_output=True
                             )
                         if rc.returncode == 0:

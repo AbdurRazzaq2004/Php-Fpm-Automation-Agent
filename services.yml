@@ -26,6 +26,7 @@ php_extensions:
   - bcmath
   - tokenizer
   - fileinfo
+  - sqlite3
 
 enable_ssl: false
 
@@ -42,6 +43,8 @@ post_deploy_commands:
   - "cp .env.example .env"
   - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
   - "php artisan key:generate --force"
+  - "touch database/database.sqlite"
+  - "php artisan migrate --force"
   - "php artisan config:cache"
   - "php artisan route:cache"
   - "php artisan view:cache"

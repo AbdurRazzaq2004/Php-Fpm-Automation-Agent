@@ -37,4 +37,4 @@ php_pool_min_spare: 1
 php_pool_max_spare: 4
 
 post_deploy_commands:
-  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+  - "composer update --no-interaction --prefer-dist --optimize-autoloader --no-dev --ignore-platform-reqs"

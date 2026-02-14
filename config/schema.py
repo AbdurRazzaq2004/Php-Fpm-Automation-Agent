@@ -214,7 +214,7 @@ SERVICE_DEFAULTS: Dict[str, Any] = {
     "php_pool_max_requests": 500,
 
     # Node/Next.js-specific
-    "node_instances": 0,            # PM2 instances (0 = auto/cluster mode)
+    "node_instances": 1,            # PM2 instances (1 = single fork, >1 = cluster mode)
     "node_max_memory": 512,            # MB — PM2/systemd max memory before restart
 }
 

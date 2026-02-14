@@ -271,10 +271,18 @@ WantedBy=multi-user.target
             args = ""
 
         # Determine exec_mode
-        exec_mode = "cluster" if instances > 1 else "fork"
+        # instances=0 means "auto" (all CPUs) — only valid in cluster mode
+        if instances == 0:
+            exec_mode = "cluster"
+        elif instances > 1:
+            exec_mode = "cluster"
+        else:
+            exec_mode = "fork"
+            instances = 1  # Ensure at least 1 for fork mode
         # Only cluster mode works with Node.js scripts, not custom binaries
         if not script_path.endswith(".js") and exec_mode == "cluster":
             exec_mode = "fork"
+            instances = max(instances, 1)
 
         env_json = json.dumps(env_vars, indent=8)
 

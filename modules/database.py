@@ -306,35 +306,50 @@ class DatabaseManager:
 
     def _configure_mysql_root_auth(self):
         """
-        Verify MySQL root access.
+        Verify MySQL root access. If password-locked, reset via skip-grant-tables.
 
-        We keep auth_socket (Ubuntu default) so admin operations always work
-        via 'sudo mysql'. Apps should use dedicated users, not root.
+        Uses mysql_native_password with empty password (works on all MySQL 8 installs).
         """
         admin_cmd = self._get_mysql_admin_cmd()
         if admin_cmd:
             self.log.info(f"MySQL root accessible via: {admin_cmd.split()[0]}")
+            return
+        
+        self.log.warn("Cannot access MySQL as root — trying auth reset via skip-grant-tables...")
+        import time
+
+        # Stop MySQL
+        self._run("systemctl stop mysql 2>/dev/null; systemctl stop mysqld 2>/dev/null")
+        self._run("killall -9 mysqld mysqld_safe 2>/dev/null")
+        time.sleep(2)
+
+        # Ensure socket directory exists
+        self._run("mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld")
+
+        # Start with skip-grant-tables
+        self._run("nohup mysqld --skip-grant-tables --skip-networking --user=mysql > /dev/null 2>&1 &")
+        time.sleep(5)
+
+        # Reset root to mysql_native_password with empty password
+        rc, _, err = self._run(
+            'mysql -u root -e "FLUSH PRIVILEGES; '
+            "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY ''; "
+            'FLUSH PRIVILEGES;"'
+        )
+
+        # Stop skip-grant-tables instance
+        self._run("killall mysqld 2>/dev/null")
+        time.sleep(2)
+
+        # Start MySQL normally
+        self._run("systemctl start mysql 2>/dev/null; systemctl start mysqld 2>/dev/null")
+        time.sleep(2)
+
+        admin_cmd = self._get_mysql_admin_cmd()
+        if admin_cmd:
+            self.log.info("MySQL root access restored")
         else:
-            self.log.warn("Cannot access MySQL as root — trying auth reset...")
-            # Last resort: reset via skip-grant-tables
-            import time
-            self._run("systemctl stop mysql 2>/dev/null; systemctl stop mysqld 2>/dev/null")
-            self._run("mysqld_safe --skip-grant-tables --skip-networking &")
-            time.sleep(3)
-            self._run(
-                'mysql -u root -e "FLUSH PRIVILEGES; '
-                "ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket; "
-                'FLUSH PRIVILEGES;"'
-            )
-            self._run("mysqladmin shutdown 2>/dev/null")
-            time.sleep(1)
-            self._run("systemctl start mysql 2>/dev/null; systemctl start mysqld 2>/dev/null")
-            time.sleep(2)
-            admin_cmd = self._get_mysql_admin_cmd()
-            if admin_cmd:
-                self.log.info("MySQL root access restored")
-            else:
-                self.log.warn("Could not restore MySQL root access")
+            self.log.warn("Could not restore MySQL root access — manual intervention may be needed")
 
     def _ensure_postgresql(self, installed_dbs: Dict) -> bool:
         """
@@ -663,30 +678,27 @@ class DatabaseManager:
             return False
 
         # Step 2: Create app user with password and grant privileges
-        if user and password:
-            pwd_clause = f"IDENTIFIED BY '{password}'"
-            # Always create/update user with password (works for both root and non-root)
-            if user == "root":
-                # For root: set password via ALTER USER
-                self._run(
-                    f'{admin_cmd} -e "ALTER USER \'root\'@\'localhost\' '
-                    f"IDENTIFIED WITH mysql_native_password BY '{password}'; "
-                    f'FLUSH PRIVILEGES;"'
-                )
-                self.log.info("Set MySQL root password from app config")
-            else:
-                # For non-root: CREATE USER + GRANT
-                self._run(
-                    f'{admin_cmd} -e "CREATE USER IF NOT EXISTS '
-                    f"'{user}'@'localhost' {pwd_clause}; "
-                    f'FLUSH PRIVILEGES;"'
-                )
-                self._run(
-                    f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON `{dbname}`.* '
-                    f"TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
-                )
-                self.log.info(f"MySQL user '{user}' ready with full privileges on '{dbname}'")
-        elif user and user != "root":
+        # NEVER alter the root password — that breaks admin access for future deploys.
+        if user == "root":
+            self.log.info("App uses root user — skipping user creation (DB already created)")
+        elif user and password:
+            # Non-root: CREATE USER + GRANT
+            self._run(
+                f'{admin_cmd} -e "CREATE USER IF NOT EXISTS '
+                f"'{user}'@'localhost' IDENTIFIED BY '{password}'; "
+                f'FLUSH PRIVILEGES;"'
+            )
+            # Update password in case user already exists with different password
+            self._run(
+                f'{admin_cmd} -e "ALTER USER \'{user}\'@\'localhost\' '
+                f"IDENTIFIED BY '{password}'; FLUSH PRIVILEGES;\""
+            )
+            self._run(
+                f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON `{dbname}`.* '
+                f"TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
+            )
+            self.log.info(f"MySQL user '{user}' ready with full privileges on '{dbname}'")
+        elif user:
             # Non-root user without password
             self._run(
                 f'{admin_cmd} -e "CREATE USER IF NOT EXISTS '

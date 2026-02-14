@@ -22,6 +22,8 @@ php_extensions:
   - zip
   - mysql
   - opcache
+  - redis
+  - xsl
 
 enable_ssl: false
 

@@ -127,7 +127,8 @@ class ProcessManager:
         # Memory limits
         memory_limit = ""
         if config.get("node_max_memory"):
-            memory_limit = f"MemoryMax={config['node_max_memory']}M"
+            mem_val = str(config['node_max_memory']).rstrip('MmGgKk')
+            memory_limit = f"MemoryMax={mem_val}M"
 
         unit = f"""[Unit]
 Description={description}

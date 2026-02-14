@@ -711,17 +711,23 @@ class UniversalDeployer:
                 db_user = f"app_{db_name}"
                 log.info(f"Using dedicated MySQL user '{db_user}' instead of root")
 
-        # Store the generated password so provision_database can use it
-        if "password" not in db_credentials or not db_credentials.get("password"):
+        # Always use the generated password (extracted .env.example values are placeholders)
+        # The only exception is if the user explicitly set credentials in services.yml
+        placeholder_passwords = {
+            "", "your_password_here", "password", "root123", "secret",
+            "changeme", "your_password", "your-password", "xxxxx",
+        }
+        existing_pw = db_credentials.get("password", "")
+        if not existing_pw or existing_pw.lower().strip() in placeholder_passwords:
             db_credentials["password"] = db_password
         else:
             db_password = db_credentials["password"]
 
-        # Ensure dbname/user are set in credentials for provisioning
-        db_credentials.setdefault("dbname", db_name)
-        db_credentials.setdefault("user", db_user)
-        db_credentials.setdefault("host", db_host)
-        db_credentials.setdefault("port", db_port)
+        # Update credentials with resolved user/db (may have changed from root → app_*)
+        db_credentials["dbname"] = db_name
+        db_credentials["user"] = db_user
+        db_credentials["host"] = db_host
+        db_credentials["port"] = db_port
 
         # Replace values in the template
         replacements = {

@@ -215,7 +215,7 @@ SERVICE_DEFAULTS: Dict[str, Any] = {
 
     # Node/Next.js-specific
     "node_instances": 0,            # PM2 instances (0 = auto/cluster mode)
-    "node_max_memory": "512M",      # PM2 max memory before restart
+    "node_max_memory": 512,            # MB — PM2/systemd max memory before restart
 }
 
 # ── Required Fields ─────────────────────────────────────────────

@@ -321,7 +321,9 @@ class NodeRuntime(BaseRuntime):
         }
 
         if config.get("node_max_memory"):
-            env_vars["NODE_OPTIONS"] = f"--max-old-space-size={config['node_max_memory']}"
+            # --max-old-space-size expects a pure number in MB
+            mem_val = str(config['node_max_memory']).rstrip('MmGgKk')
+            env_vars["NODE_OPTIONS"] = f"--max-old-space-size={mem_val}"
 
         env_vars.update(config.get("environment_vars", {}))
         return env_vars

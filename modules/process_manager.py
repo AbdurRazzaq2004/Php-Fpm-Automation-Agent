@@ -221,8 +221,9 @@ WantedBy=multi-user.target
         # Start with PM2
         rc, out, err = self._run(f"pm2 start {eco_path}", cwd=deploy_path, timeout=60)
         if rc != 0:
-            self.log.error(f"PM2 start failed: {err}")
-            return False
+            self.log.warn(f"PM2 start failed: {err or out}")
+            self.log.info("Falling back to systemd...")
+            return self.create_systemd_service(config, runtime)
 
         # Save PM2 process list
         self._run("pm2 save")
@@ -254,8 +255,14 @@ WantedBy=multi-user.target
                              env_vars: Dict, port: int) -> str:
         """Generate PM2 ecosystem.config.js."""
         # Parse script into command and args
+        # PM2 expects the .js file as 'script', not 'node' as the command
         parts = script.split()
-        if len(parts) > 1:
+        interpreters = {"node", "nodejs", "bun", "deno"}
+        if parts[0] in interpreters and len(parts) > 1:
+            # e.g. "node server/index.js --port 5000" → script=server/index.js, args=--port 5000
+            script_path = parts[1]
+            args = " ".join(parts[2:]) if len(parts) > 2 else ""
+        elif len(parts) > 1:
             script_path = parts[0]
             args = " ".join(parts[1:])
         else:

@@ -16,4 +16,4 @@ domain: 98.81.165.46
 repo_url: https://github.com/AbdurRazzaq2004/sample-php-app-for-automationTest.git
 branch: main
 deploy_path: /var/www/todo-php
-web_server: nginx
+web_server: apache

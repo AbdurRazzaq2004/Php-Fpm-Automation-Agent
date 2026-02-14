@@ -1,0 +1,97 @@
+# ============================================================
+# PHP-FPM Automation Agent - Laravel Application Example
+# ============================================================
+# Deploy a Laravel application with all best practices:
+#   - public/ as document root
+#   - Storage and cache directories writable
+#   - Shared storage across deployments
+#   - Artisan commands in post-deploy
+#   - Scheduled tasks via cron
+#
+# Usage:
+#   sudo python3 deployer.py deploy --config examples/laravel-app.yml
+# ============================================================
+
+service_name: laravel-app
+domain: laravel.example.com
+repo_url: https://github.com/your-org/laravel-project.git
+branch: main
+deploy_path: /var/www/laravel-app
+php_version: "8.2"
+web_server: nginx
+
+# Laravel uses public/ as document root
+document_root_suffix: "public"
+
+# PHP Extensions required by Laravel
+php_extensions:
+  - cli
+  - fpm
+  - common
+  - curl
+  - mbstring
+  - xml
+  - zip
+  - mysql
+  - opcache
+  - gd
+  - intl
+  - bcmath
+  - redis
+  - tokenizer
+  - fileinfo
+  - dom
+  - pdo
+  - pdo_mysql
+
+# Private repo access
+# pat_token: ghp_xxxxxxxxxxxxxxxxxxxx
+
+# Environment file (create this on the server first)
+# environment_file: /etc/php-deployer/envs/laravel-app.env
+
+# SSL
+enable_ssl: false
+
+# Upload limits
+max_upload_size: "128M"
+
+# PHP-FPM pool tuning for Laravel
+php_memory_limit: "512M"
+php_max_execution_time: 300
+php_pool_max_children: 20
+php_pool_start_servers: 4
+php_pool_min_spare: 2
+php_pool_max_spare: 8
+php_pool_max_requests: 500
+
+# Directories that need write permissions
+writable_dirs:
+  - "storage"
+  - "storage/app"
+  - "storage/app/public"
+  - "storage/framework"
+  - "storage/framework/cache"
+  - "storage/framework/sessions"
+  - "storage/framework/views"
+  - "storage/logs"
+  - "bootstrap/cache"
+
+# Directories that persist across deployments
+shared_dirs:
+  - "storage/app/public"
+  - "storage/logs"
+
+# Post-deploy commands
+post_deploy_commands:
+  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+  - "php artisan key:generate --force"
+  - "php artisan migrate --force"
+  - "php artisan config:cache"
+  - "php artisan route:cache"
+  - "php artisan view:cache"
+  - "php artisan storage:link"
+
+# Laravel scheduler cron
+cron_jobs:
+  - "* * * * * cd /var/www/laravel-app && php artisan schedule:run >> /dev/null 2>&1"

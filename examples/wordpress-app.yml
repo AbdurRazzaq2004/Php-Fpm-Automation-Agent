@@ -1,0 +1,60 @@
+# ============================================================
+# PHP-FPM Automation Agent - WordPress + WooCommerce Example
+# ============================================================
+# Deploy WordPress with Apache (uses .htaccess) and
+# WooCommerce-appropriate settings.
+#
+# Usage:
+#   sudo python3 deployer.py deploy --config examples/wordpress-app.yml
+# ============================================================
+
+service_name: wordpress-site
+domain: shop.example.com
+repo_url: https://github.com/your-org/wordpress-site.git
+branch: main
+deploy_path: /var/www/wordpress-site
+php_version: "8.2"
+web_server: apache    # Apache is better for WordPress (.htaccess support)
+
+# WordPress PHP extensions
+php_extensions:
+  - cli
+  - fpm
+  - common
+  - curl
+  - mbstring
+  - xml
+  - zip
+  - mysql
+  - opcache
+  - gd
+  - intl
+  - imagick
+  - bcmath
+  - soap
+
+# SSL
+enable_ssl: false
+
+# WordPress needs larger uploads for media/products
+max_upload_size: "256M"
+
+# WooCommerce needs more memory
+php_memory_limit: "512M"
+php_max_execution_time: 600
+
+# Pool tuning
+php_pool_max_children: 15
+php_pool_start_servers: 3
+php_pool_min_spare: 2
+php_pool_max_spare: 6
+
+# Writable directories
+writable_dirs:
+  - "wp-content/uploads"
+  - "wp-content/cache"
+  - "wp-content/upgrade"
+
+# Shared directories (persist across deployments)
+shared_dirs:
+  - "wp-content/uploads"

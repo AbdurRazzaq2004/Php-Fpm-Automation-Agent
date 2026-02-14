@@ -1,0 +1,106 @@
+# ============================================================
+# PHP-FPM Automation Agent - Multiple Applications Example
+# ============================================================
+# Deploy 3 PHP apps on the same server, each with:
+#   - Isolated PHP-FPM pool
+#   - Unique unix socket
+#   - Dedicated system user
+#   - Separate web server config
+#
+# Usage:
+#   sudo python3 deployer.py deploy --config examples/multi-app.yml
+# ============================================================
+
+services:
+  # ── Service 1: Main Website (PHP 8.2 + Nginx) ──────────────
+  - service_name: company-website
+    domain: www.example.com
+    repo_url: https://github.com/your-org/company-site.git
+    branch: production
+    deploy_path: /var/www/company-website
+    php_version: "8.2"
+    web_server: nginx
+    php_extensions:
+      - cli
+      - fpm
+      - common
+      - curl
+      - mbstring
+      - xml
+      - zip
+      - mysql
+      - opcache
+      - gd
+      - intl
+    enable_ssl: false
+    max_upload_size: "32M"
+    php_memory_limit: "256M"
+    php_pool_max_children: 15
+    php_pool_start_servers: 3
+    php_pool_min_spare: 2
+    php_pool_max_spare: 5
+    post_deploy_commands:
+      - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+
+  # ── Service 2: Admin Panel (PHP 8.1 + Nginx) ───────────────
+  - service_name: admin-panel
+    domain: admin.example.com
+    repo_url: https://github.com/your-org/admin-panel.git
+    branch: main
+    deploy_path: /var/www/admin-panel
+    php_version: "8.1"
+    web_server: nginx
+    # pat_token: ghp_xxxxxxxxxxxxxxxxxxxx  # Private repo
+    php_extensions:
+      - cli
+      - fpm
+      - common
+      - curl
+      - mbstring
+      - xml
+      - zip
+      - mysql
+      - opcache
+      - redis
+    enable_ssl: false
+    max_upload_size: "16M"
+    php_memory_limit: "128M"
+    php_pool_max_children: 5
+    php_pool_start_servers: 2
+    php_pool_min_spare: 1
+    php_pool_max_spare: 3
+    post_deploy_commands:
+      - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+
+  # ── Service 3: API Server (PHP 8.3 + Nginx) ────────────────
+  - service_name: api-server
+    domain: api.example.com
+    repo_url: https://github.com/your-org/api-server.git
+    branch: release
+    deploy_path: /var/www/api-server
+    php_version: "8.3"
+    web_server: nginx
+    php_extensions:
+      - cli
+      - fpm
+      - common
+      - curl
+      - mbstring
+      - xml
+      - zip
+      - pgsql
+      - opcache
+      - redis
+      - bcmath
+      - intl
+    enable_ssl: false
+    max_upload_size: "10M"
+    php_memory_limit: "512M"
+    php_max_execution_time: 120
+    php_pool_max_children: 20
+    php_pool_start_servers: 4
+    php_pool_min_spare: 2
+    php_pool_max_spare: 8
+    php_pool_max_requests: 1000
+    post_deploy_commands:
+      - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"

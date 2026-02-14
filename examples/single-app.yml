@@ -1,0 +1,52 @@
+# ============================================================
+# PHP-FPM Automation Agent - Single Application Example
+# ============================================================
+# Deploy a single PHP application with Nginx and PHP 8.2
+#
+# Usage:
+#   sudo python3 deployer.py deploy --config examples/single-app.yml
+# ============================================================
+
+service_name: my-php-app
+domain: app.example.com
+repo_url: https://github.com/your-org/your-app.git
+branch: main
+deploy_path: /var/www/my-php-app
+php_version: "8.2"
+web_server: nginx
+
+# PHP Extensions to install
+php_extensions:
+  - cli
+  - fpm
+  - common
+  - curl
+  - mbstring
+  - xml
+  - zip
+  - mysql
+  - opcache
+  - gd
+  - intl
+  - bcmath
+
+# Private repo? Add your PAT token
+# pat_token: ghp_xxxxxxxxxxxxxxxxxxxx
+
+# SSL (set to true after DNS is configured)
+enable_ssl: false
+
+# Upload limits
+max_upload_size: "64M"
+
+# PHP-FPM pool tuning
+php_memory_limit: "256M"
+php_max_execution_time: 300
+php_pool_max_children: 10
+php_pool_start_servers: 2
+php_pool_min_spare: 1
+php_pool_max_spare: 4
+
+# Post-deploy commands (run as service user)
+post_deploy_commands:
+  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"

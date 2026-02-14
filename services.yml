@@ -1,0 +1,225 @@
+# =============================================================================
+# PHP-FPM Automation Agent — Main Deployment Configuration
+# =============================================================================
+#
+# This is the DEFAULT config file. The deployer reads this automatically:
+#     sudo python3 deployer.py deploy
+#
+# To use a different config file, pass --config:
+#     sudo python3 deployer.py deploy --config production.yml
+#     sudo python3 deployer.py deploy --config examples/multi-app.yml
+#
+# You can define ONE service or MANY services in a single file.
+# For multiple services, use a top-level "services:" list (see examples/multi-app.yml).
+# For a single service, just put the fields at the root level like below.
+#
+# =============================================================================
+
+
+# ---------------------------------------------------------------------------
+# SERVICE IDENTITY (required)
+# ---------------------------------------------------------------------------
+
+# A unique name for this service — used for user, pool, logs, and backups.
+# Rules: starts with a letter, only letters/numbers/hyphens/underscores, 2-64 chars.
+service_name: my-php-app
+
+# The domain name that will point to this app (must have DNS A record to your server IP).
+domain: app.example.com
+
+# ---------------------------------------------------------------------------
+# GIT SOURCE (required)
+# ---------------------------------------------------------------------------
+
+# HTTPS URL of your Git repository (must end with .git or be a valid HTTPS URL).
+# Examples:
+#   Public repo:  https://github.com/your-org/your-app.git
+#   Private repo: https://github.com/your-org/private-app.git  (also set pat_token below)
+repo_url: https://github.com/your-org/your-app.git
+
+# Git branch to deploy (default: main).
+branch: main
+
+# Personal Access Token for private repos — remove the "#" and paste your token.
+# The token is injected into the clone URL at runtime and never written to disk.
+# Generate one at: https://github.com/settings/tokens (needs "repo" scope).
+# pat_token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# ---------------------------------------------------------------------------
+# DEPLOYMENT PATH (required)
+# ---------------------------------------------------------------------------
+
+# Absolute path on the server where the app source code will live.
+# A dedicated Linux user "svc_<service_name>" will own this directory.
+deploy_path: /var/www/my-php-app
+
+# If your framework serves from a subfolder (e.g., Laravel uses "public/"),
+# uncomment and set this so the web server points to the correct document root.
+# document_root_suffix: /public
+
+# ---------------------------------------------------------------------------
+# PHP VERSION & WEB SERVER
+# ---------------------------------------------------------------------------
+
+# PHP version to use for this service.
+# Allowed values: "7.4", "8.0", "8.1", "8.2", "8.3", "8.4"
+# Multiple services CAN use different PHP versions on the same server.
+php_version: "8.2"
+
+# Web server to generate config for.
+# Allowed values: nginx, apache
+# Nginx is recommended for most setups.
+web_server: nginx
+
+# ---------------------------------------------------------------------------
+# PHP EXTENSIONS
+# ---------------------------------------------------------------------------
+
+# List of PHP extensions to install for this PHP version.
+# Common extensions: cli, fpm, common, curl, mbstring, xml, zip, mysql, pgsql,
+#   sqlite3, gd, intl, bcmath, soap, redis, memcached, imagick, opcache,
+#   readline, tokenizer, json, iconv, fileinfo, dom, pdo, pdo_mysql, pdo_pgsql
+# Only "cli" and "fpm" are strictly required — add what your app needs.
+php_extensions:
+  - cli          # PHP command-line interface (required)
+  - fpm          # FastCGI Process Manager (required)
+  - common       # Common PHP modules
+  - curl         # HTTP requests (APIs, webhooks)
+  - mbstring     # Multi-byte string support (UTF-8)
+  - xml          # XML parsing
+  - zip          # ZIP archive support
+  - mysql        # MySQL/MariaDB database driver
+  - opcache      # Bytecode cache (speeds up PHP significantly)
+  - gd           # Image processing (thumbnails, captchas)
+  - intl         # Internationalization (dates, numbers, currencies)
+  - bcmath       # Arbitrary precision math (payment calculations)
+
+# ---------------------------------------------------------------------------
+# SSL / HTTPS
+# ---------------------------------------------------------------------------
+
+# Set to true to enable HTTPS using Let's Encrypt (free, auto-renewed).
+# IMPORTANT: Your domain's DNS must already point to this server's IP before enabling.
+# The deployer uses Certbot to obtain and install the certificate automatically.
+enable_ssl: false
+
+# For custom SSL certificates (instead of Let's Encrypt), provide paths:
+# ssl_cert_path: /etc/ssl/certs/app.example.com.pem
+# ssl_key_path: /etc/ssl/private/app.example.com.key
+
+# ---------------------------------------------------------------------------
+# UPLOAD & PHP LIMITS
+# ---------------------------------------------------------------------------
+
+# Maximum file upload size (PHP + web server are both configured).
+# Use K for kilobytes, M for megabytes, G for gigabytes.
+max_upload_size: "64M"
+
+# Maximum memory a single PHP process can use.
+# Increase for heavy apps (image processing, large data imports).
+php_memory_limit: "256M"
+
+# Maximum time (seconds) a PHP script can run before being killed.
+# Increase for long-running tasks (imports, report generation).
+php_max_execution_time: 300
+
+# ---------------------------------------------------------------------------
+# PHP-FPM POOL TUNING
+# ---------------------------------------------------------------------------
+
+# These control how many PHP worker processes run for this service.
+# Each service gets its own isolated pool with its own Unix socket.
+#
+# Sizing guide (based on available RAM per service):
+#   Small  (1-2 GB):  max_children=5,  start=2, min_spare=1, max_spare=3
+#   Medium (2-4 GB):  max_children=10, start=3, min_spare=2, max_spare=5
+#   Large  (4-8 GB):  max_children=20, start=5, min_spare=3, max_spare=10
+#   XL     (8+ GB):   max_children=50, start=10, min_spare=5, max_spare=20
+#
+# Formula: max_children = Available_RAM_MB / php_memory_limit_MB
+
+# Maximum number of child processes (hard limit).
+php_pool_max_children: 10
+
+# Number of children created on startup.
+php_pool_start_servers: 2
+
+# Minimum number of idle children kept alive.
+php_pool_min_spare: 1
+
+# Maximum number of idle children allowed.
+php_pool_max_spare: 4
+
+# Recycle a worker after this many requests (prevents memory leaks).
+# php_pool_max_requests: 500
+
+# ---------------------------------------------------------------------------
+# WRITABLE & SHARED DIRECTORIES
+# ---------------------------------------------------------------------------
+
+# Directories that need write permissions (e.g., logs, cache, uploads).
+# Paths are relative to deploy_path. They get chmod 770 (owner + group write).
+# writable_dirs:
+#   - storage/logs
+#   - storage/framework/cache
+#   - storage/framework/sessions
+#   - storage/framework/views
+#   - bootstrap/cache
+#   - public/uploads
+
+# Directories preserved across deployments (symlinked, not overwritten by git pull).
+# Useful for user uploads, local config, or generated files.
+# shared_dirs:
+#   - storage/app/public
+#   - public/uploads
+
+# ---------------------------------------------------------------------------
+# ENVIRONMENT FILE
+# ---------------------------------------------------------------------------
+
+# Path to a .env file to copy into deploy_path after cloning.
+# The file is set to chmod 600 (only the service user can read it).
+# environment_file: /root/envs/my-php-app.env
+
+# ---------------------------------------------------------------------------
+# HOOKS — PRE & POST DEPLOY COMMANDS
+# ---------------------------------------------------------------------------
+
+# Commands to run BEFORE the deployment starts (as the service user).
+# pre_deploy_commands:
+#   - "php artisan down --retry=60"
+
+# Commands to run AFTER the deployment finishes (as the service user).
+# Commonly used for: composer install, migrations, cache clearing, etc.
+post_deploy_commands:
+  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+  # - "php artisan migrate --force"
+  # - "php artisan config:cache"
+  # - "php artisan route:cache"
+  # - "php artisan view:cache"
+  # - "php artisan storage:link"
+
+# ---------------------------------------------------------------------------
+# CRON JOBS
+# ---------------------------------------------------------------------------
+
+# Cron entries for this service (run as the service user).
+# Each entry is a standard cron expression + command.
+# cron_jobs:
+#   - "* * * * * cd /var/www/my-php-app && php artisan schedule:run >> /dev/null 2>&1"
+
+# ---------------------------------------------------------------------------
+# CUSTOM WEB SERVER DIRECTIVES
+# ---------------------------------------------------------------------------
+
+# Extra Nginx directives injected inside the server{} block.
+# extra_nginx_config: |
+#   location /api {
+#       try_files $uri $uri/ /index.php?$query_string;
+#   }
+
+# Extra Apache directives injected inside the <VirtualHost> block.
+# extra_apache_config: |
+#   <Directory /var/www/my-php-app>
+#       AllowOverride All
+#   </Directory>

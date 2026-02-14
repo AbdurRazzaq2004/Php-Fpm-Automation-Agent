@@ -1,0 +1,29 @@
+# =============================================================================
+# PHP-FPM Automation Agent — Docker Compose
+# =============================================================================
+# Easy way to run the deployer without remembering long docker run commands.
+#
+# Usage:
+#   docker compose run --rm deployer deploy            # deploy using services.yml
+#   docker compose run --rm deployer validate           # validate config only
+#   docker compose run --rm deployer deploy --dry-run   # dry run
+#   docker compose run --rm deployer status             # check service status
+#
+# To use a different config file, mount it as services.yml:
+#   Edit the volumes section below, or use deploy.sh
+# =============================================================================
+
+services:
+  deployer:
+    build: .
+    image: php-deployer:latest
+    container_name: php-deployer
+    privileged: true               # Required: nsenter needs full privileges
+    pid: host                      # Required: access host PID namespace
+    network_mode: host             # Required: health checks use host network
+    volumes:
+      - /:/host                    # Mount host root filesystem (read-write)
+      - ./services.yml:/app/services.yml   # Your deployment config
+      # Mount additional configs if needed:
+      # - ./production.yml:/app/production.yml
+      # - ./.env.myapp:/app/.env.myapp

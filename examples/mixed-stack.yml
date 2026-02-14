@@ -1,0 +1,101 @@
+# ============================================================
+# PHP-FPM Automation Agent - Mixed Stack Example
+# ============================================================
+# Run Nginx AND Apache services on the SAME server:
+#   - Nginx on port 80/443 (primary)
+#   - Apache on port 8080 (behind Nginx reverse proxy or standalone)
+#
+# This demonstrates maximum isolation:
+#   - Different PHP versions
+#   - Different web servers
+#   - Different users
+#   - Different sockets
+#
+# Usage:
+#   sudo python3 deployer.py deploy --config examples/mixed-stack.yml
+# ============================================================
+
+services:
+  # ── Laravel API on Nginx + PHP 8.3 ─────────────────────────
+  - service_name: api-v2
+    domain: api.example.com
+    repo_url: https://github.com/your-org/api-v2.git
+    branch: main
+    deploy_path: /var/www/api-v2
+    document_root_suffix: "public"
+    php_version: "8.3"
+    web_server: nginx
+    php_extensions:
+      - cli
+      - fpm
+      - common
+      - curl
+      - mbstring
+      - xml
+      - zip
+      - pgsql
+      - opcache
+      - redis
+      - bcmath
+      - intl
+    max_upload_size: "10M"
+    php_memory_limit: "256M"
+    php_pool_max_children: 25
+    php_pool_start_servers: 5
+    post_deploy_commands:
+      - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+      - "php artisan migrate --force"
+      - "php artisan config:cache"
+      - "php artisan route:cache"
+
+  # ── Legacy PHP App on Nginx + PHP 7.4 ──────────────────────
+  - service_name: legacy-crm
+    domain: crm.example.com
+    repo_url: https://github.com/your-org/legacy-crm.git
+    branch: stable
+    deploy_path: /var/www/legacy-crm
+    php_version: "7.4"
+    web_server: nginx
+    php_extensions:
+      - cli
+      - fpm
+      - common
+      - curl
+      - mbstring
+      - xml
+      - zip
+      - mysql
+      - opcache
+      - gd
+      - soap
+    max_upload_size: "64M"
+    php_memory_limit: "512M"
+    php_pool_max_children: 8
+    php_pool_start_servers: 2
+
+  # ── WordPress on Nginx + PHP 8.2 ───────────────────────────
+  - service_name: company-blog
+    domain: blog.example.com
+    repo_url: https://github.com/your-org/company-blog.git
+    branch: main
+    deploy_path: /var/www/company-blog
+    php_version: "8.2"
+    web_server: nginx
+    php_extensions:
+      - cli
+      - fpm
+      - common
+      - curl
+      - mbstring
+      - xml
+      - zip
+      - mysql
+      - opcache
+      - gd
+      - imagick
+    max_upload_size: "128M"
+    php_memory_limit: "256M"
+    php_pool_max_children: 10
+    writable_dirs:
+      - "wp-content/uploads"
+      - "wp-content/cache"

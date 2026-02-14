@@ -467,6 +467,11 @@ class PythonRuntime(BaseRuntime):
             if creds:
                 base["database_credentials"] = creds
 
+        # Detect app port from .env.example or config files
+        detected_port = self._detect_app_port(deploy_path)
+        if detected_port:
+            base["app_port"] = detected_port
+
         return base
 
     def _detect_django_db(self, deploy_path: str) -> Optional[str]:
@@ -606,3 +611,57 @@ class PythonRuntime(BaseRuntime):
                           f"db={creds.get('dbname', '?')}, user={creds.get('user', '?')}")
 
         return creds
+
+    def _detect_app_port(self, deploy_path: str) -> Optional[int]:
+        """
+        Detect the application port from .env.example, config files, or app source.
+        Returns the port number or None if not detected.
+        """
+        # Check .env.example first
+        env_files = [".env.example", ".env.sample", ".env.template", ".env.dist"]
+        for ef in env_files:
+            p = os.path.join(deploy_path, ef)
+            if os.path.isfile(p):
+                try:
+                    with open(p, "r", errors="ignore") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("#") or "=" not in line:
+                                continue
+                            key, _, val = line.partition("=")
+                            key = key.strip().upper()
+                            val = val.strip().strip("'\"")
+                            if key in ("APP_PORT", "PORT", "FLASK_RUN_PORT", "SERVER_PORT"):
+                                try:
+                                    port = int(val)
+                                    self.log.info(f"Detected app port {port} from {ef}")
+                                    return port
+                                except ValueError:
+                                    pass
+                except Exception:
+                    pass
+
+        # Check common Python entry files for port numbers
+        for entry_file in ["app.py", "main.py", "run.py", "server.py", "wsgi.py"]:
+            fpath = os.path.join(deploy_path, entry_file)
+            if os.path.isfile(fpath):
+                try:
+                    with open(fpath, "r", errors="ignore") as f:
+                        content = f.read()
+                    # Look for app.run(port=XXXX) or similar patterns
+                    match = re.search(r'\.run\([^)]*port\s*=\s*(\d+)', content)
+                    if match:
+                        port = int(match.group(1))
+                        self.log.info(f"Detected app port {port} from {entry_file}")
+                        return port
+                    # Look for PORT = XXXX
+                    match = re.search(r'(?:PORT|port)\s*=\s*(?:int\([^)]*\)\s*or\s*)?(\d{4,5})', content)
+                    if match:
+                        port = int(match.group(1))
+                        if 1024 <= port <= 65535:
+                            self.log.info(f"Detected app port {port} from {entry_file}")
+                            return port
+                except Exception:
+                    pass
+
+        return None

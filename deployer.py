@@ -381,6 +381,11 @@ class UniversalDeployer:
                 if framework_info.get("name"):
                     log.info(f"Detected framework: {framework_info['name']}")
 
+                # Auto-set app port from framework detection
+                if framework_info.get("app_port"):
+                    config["app_port"] = framework_info["app_port"]
+                    log.info(f"Auto-set app port: {config['app_port']}")
+
                 # Auto-set document root for static sites
                 if language == "static":
                     doc_root = runtime.get_document_root(config["deploy_path"])

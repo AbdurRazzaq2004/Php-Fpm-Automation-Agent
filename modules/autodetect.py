@@ -430,15 +430,196 @@ class AppAutoDetector:
                 doc_root = f"/{candidate}"
                 break
 
+        # Detect database from config files
+        db_driver = self._detect_generic_db_driver(path)
+        extra_extensions = []
+        if db_driver == "mysql":
+            extra_extensions = ["mysql", "pdo_mysql"]
+        elif db_driver in ("pgsql", "postgres"):
+            extra_extensions = ["pgsql", "pdo_pgsql"]
+        elif db_driver == "sqlite":
+            extra_extensions = ["sqlite3"]
+
+        # Auto-generate post_deploy if composer.json exists
+        post_deploy = []
+        if os.path.isfile(os.path.join(path, "composer.json")):
+            post_deploy.append("composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev")
+
+        # Discover SQL schema files for auto-import
+        sql_files = self._discover_sql_files(path)
+        db_names = []
+        if db_driver == "mysql" and sql_files:
+            # Parse SQL files to find CREATE DATABASE statements
+            db_names = self._extract_db_names_from_sql(sql_files)
+
         return {
             "name": "generic",
             "version": "unknown",
             "document_root_suffix": doc_root,
             "writable_dirs": [],
-            "post_deploy_commands": [],
-            "database_driver": None,
-            "extra_extensions": [],
+            "post_deploy_commands": post_deploy,
+            "database_driver": db_driver,
+            "extra_extensions": extra_extensions,
+            "sql_files": sql_files,
+            "database_names": db_names,
         }
+
+    def _discover_sql_files(self, path: str) -> List[str]:
+        """
+        Find .sql files in the repository root (not in vendor/).
+        These are likely schema/migration files that need to be imported.
+        """
+        import glob
+        sql_files = []
+        # Check root-level SQL files first
+        for f in glob.glob(os.path.join(path, "*.sql")):
+            sql_files.append(f)
+        # Check common schema directories
+        for subdir in ["database", "db", "sql", "schema", "migrations"]:
+            sql_dir = os.path.join(path, subdir)
+            if os.path.isdir(sql_dir):
+                for f in glob.glob(os.path.join(sql_dir, "*.sql")):
+                    sql_files.append(f)
+
+        if sql_files:
+            names = [os.path.basename(f) for f in sql_files]
+            self.log.info(f"Found SQL schema files: {', '.join(names)}")
+        return sql_files
+
+    def _extract_db_names_from_sql(self, sql_files: List[str]) -> List[str]:
+        """
+        Parse SQL files to extract database names from CREATE DATABASE statements.
+        Returns list of database names that need to be created.
+        """
+        db_names = []
+        for sql_file in sql_files:
+            try:
+                with open(sql_file, "r", errors="ignore") as f:
+                    content = f.read()
+                # Find CREATE DATABASE statements
+                matches = re.findall(
+                    r'create\s+database\s+(?:if\s+not\s+exists\s+)?[`"\']?(\w+)[`"\']?',
+                    content, re.IGNORECASE
+                )
+                for name in matches:
+                    if name not in db_names:
+                        db_names.append(name)
+                        self.log.info(f"Found database to create: {name}")
+            except Exception:
+                continue
+        return db_names
+
+    def _extract_table_sql(self, sql_files: List[str]) -> List[Dict]:
+        """
+        Parse SQL files and extract the database name + table creation statements,
+        so the deployer can auto-import them.
+        Returns list of dicts: [{"file": path, "database": name_or_None}]
+        """
+        results = []
+        for sql_file in sql_files:
+            try:
+                with open(sql_file, "r", errors="ignore") as f:
+                    content = f.read()
+                # Find which database this SQL uses
+                db_match = re.search(
+                    r'create\s+database\s+(?:if\s+not\s+exists\s+)?[`"\']?(\w+)',
+                    content, re.IGNORECASE
+                )
+                # Check if it has CREATE TABLE
+                has_tables = bool(re.search(r'create\s+table', content, re.IGNORECASE))
+                if has_tables or db_match:
+                    results.append({
+                        "file": sql_file,
+                        "database": db_match.group(1) if db_match else None,
+                    })
+            except Exception:
+                continue
+        return results
+
+    def _detect_generic_db_driver(self, path: str) -> Optional[str]:
+        """
+        Detect database driver for a generic PHP app by scanning config files
+        for database connection patterns (PDO DSN, mysqli, pg_connect, etc.).
+        """
+        import glob
+
+        # Patterns that indicate database usage
+        mysql_patterns = [
+            r'mysql:host=',             # PDO MySQL DSN
+            r'mysqli_connect',          # mysqli procedural
+            r'new\s+mysqli\s*\(',       # mysqli OOP
+            r'mysql_connect',           # legacy mysql_connect
+            r"'driver'\s*=>\s*'mysql'", # config arrays
+            r"DB_CONNECTION.*mysql",    # .env style
+        ]
+        pgsql_patterns = [
+            r'pgsql:host=',             # PDO PostgreSQL DSN
+            r'pg_connect\s*\(',         # pg_connect
+            r"'driver'\s*=>\s*'pgsql'",
+            r"DB_CONNECTION.*pgsql",
+        ]
+        sqlite_patterns = [
+            r'sqlite:',                  # PDO SQLite DSN
+            r'sqlite3\s*\(',            # SQLite3 class
+            r"'driver'\s*=>\s*'sqlite'",
+            r"DB_CONNECTION.*sqlite",
+        ]
+
+        # Scan config files and PHP files in config/ directory
+        scan_files = []
+        # Direct config files
+        for fname in [".env", ".env.example", ".env.production"]:
+            fpath = os.path.join(path, fname)
+            if os.path.isfile(fpath):
+                scan_files.append(fpath)
+
+        # Config directory PHP files
+        config_dir = os.path.join(path, "config")
+        if os.path.isdir(config_dir):
+            for php_file in glob.glob(os.path.join(config_dir, "*.php")):
+                scan_files.append(php_file)
+
+        # Also check app/ directory (first level only) for database classes
+        app_dir = os.path.join(path, "app")
+        if os.path.isdir(app_dir):
+            for root, dirs, files in os.walk(app_dir):
+                for f in files:
+                    if f.endswith(".php") and any(kw in f.lower() for kw in ["database", "db", "connection"]):
+                        scan_files.append(os.path.join(root, f))
+                # Limit depth to 3 levels
+                depth = root.replace(app_dir, "").count(os.sep)
+                if depth >= 3:
+                    dirs.clear()
+
+        # Read and scan all collected files
+        combined_content = ""
+        for fpath in scan_files:
+            try:
+                with open(fpath, "r", errors="ignore") as f:
+                    combined_content += f.read() + "\n"
+            except Exception:
+                continue
+
+        if not combined_content:
+            return None
+
+        # Check patterns (order: mysql first since it's most common)
+        for pattern in mysql_patterns:
+            if re.search(pattern, combined_content, re.IGNORECASE):
+                self.log.info("Detected MySQL database usage in config files")
+                return "mysql"
+
+        for pattern in pgsql_patterns:
+            if re.search(pattern, combined_content, re.IGNORECASE):
+                self.log.info("Detected PostgreSQL database usage in config files")
+                return "pgsql"
+
+        for pattern in sqlite_patterns:
+            if re.search(pattern, combined_content, re.IGNORECASE):
+                self.log.info("Detected SQLite database usage in config files")
+                return "sqlite"
+
+        return None
 
     # ── Database Detection ──────────────────────────────────────
 

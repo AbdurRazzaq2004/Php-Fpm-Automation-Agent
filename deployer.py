@@ -267,6 +267,32 @@ class PHPDeployer:
 
             # Detect database requirements
             db_driver = framework_info.get("database_driver")
+
+            # Fallback: check if post_deploy_commands or php_extensions hint at a DB
+            if not db_driver:
+                # Check configured extensions for DB hints
+                exts = config.get("php_extensions", [])
+                if "mysql" in exts or "pdo_mysql" in exts:
+                    db_driver = "mysql"
+                elif "pgsql" in exts or "pdo_pgsql" in exts:
+                    db_driver = "pgsql"
+                elif "sqlite3" in exts:
+                    db_driver = "sqlite"
+
+                # Check post_deploy_commands for DB references
+                if not db_driver:
+                    for cmd in config.get("post_deploy_commands", []):
+                        cmd_lower = cmd.lower()
+                        if "mysql" in cmd_lower:
+                            db_driver = "mysql"
+                            break
+                        elif "psql" in cmd_lower or "postgres" in cmd_lower:
+                            db_driver = "pgsql"
+                            break
+
+                if db_driver:
+                    log.info(f"Database inferred from config/commands: {db_driver}")
+
             if db_driver:
                 log.info(f"Database requirement detected: {db_driver}")
                 # Add database PHP extensions
@@ -295,6 +321,48 @@ class PHPDeployer:
             if db_driver:
                 if not db_mgr.ensure_database(db_driver, config):
                     log.warn(f"Database setup for {db_driver} had issues — continuing")
+
+                # Auto-import SQL schema files if found
+                sql_files = framework_info.get("sql_files", [])
+                db_names = framework_info.get("database_names", [])
+
+                if db_driver == "mysql" and (sql_files or db_names):
+                    log.step("Auto-importing SQL schema files")
+
+                    # Create databases first (safe: IF NOT EXISTS)
+                    for db_name in db_names:
+                        log.info(f"Creating database: {db_name}")
+                        import subprocess as _sp
+                        _sp.run(
+                            f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{db_name}`;'",
+                            shell=True, capture_output=True
+                        )
+
+                    # Import SQL files
+                    for sql_file in sql_files:
+                        fname = os.path.basename(sql_file)
+                        log.info(f"Importing SQL: {fname}")
+                        # Parse which DB this file targets
+                        sql_info = autodetect._extract_table_sql([sql_file])
+                        if sql_info and sql_info[0].get("database"):
+                            target_db = sql_info[0]["database"]
+                            # Filter out CREATE DATABASE lines and import the rest
+                            rc = _sp.run(
+                                f"grep -iv 'create database' '{sql_file}' | mysql -u root {target_db}",
+                                shell=True, capture_output=True
+                            )
+                            if rc.returncode == 0:
+                                log.success(f"  ✓ Imported {fname} → {target_db}")
+                            else:
+                                log.warn(f"  SQL import had issues: {rc.stderr.decode()[:200] if rc.stderr else 'unknown'}")
+                        elif db_names:
+                            # Import into first discovered database
+                            rc = _sp.run(
+                                f"grep -iv 'create database' '{sql_file}' | mysql -u root {db_names[0]}",
+                                shell=True, capture_output=True
+                            )
+                            if rc.returncode == 0:
+                                log.success(f"  ✓ Imported {fname} → {db_names[0]}")
 
             # ── Deploy environment file ─────────────────────────
             hooks.setup_environment_file(config)

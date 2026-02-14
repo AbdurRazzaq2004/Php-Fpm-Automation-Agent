@@ -228,6 +228,9 @@ class GitManager:
         """Update an existing git repository."""
         self.log.info(f"Updating existing repository at {path}")
 
+        # Mark directory as safe to avoid 'dubious ownership' errors
+        self._run(f"git config --global --add safe.directory {path}")
+
         # Check current branch
         rc, current_branch, _ = self._run("git rev-parse --abbrev-ref HEAD", cwd=path)
         if rc == 0:

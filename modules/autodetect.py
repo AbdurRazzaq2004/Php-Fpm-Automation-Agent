@@ -82,11 +82,18 @@ class AppAutoDetector:
         best_version = self._resolve_php_constraint(php_constraint)
 
         if best_version:
+            # If there's a configured version and it satisfies the constraint, keep it
             if configured_version and configured_version != best_version:
-                self.log.warn(
-                    f"Config specifies PHP {configured_version}, but app requires '{php_constraint}'. "
-                    f"Auto-selecting PHP {best_version} for compatibility."
-                )
+                if self._version_satisfies_constraint(configured_version, php_constraint):
+                    self.log.info(
+                        f"Configured PHP {configured_version} satisfies '{php_constraint}' — keeping it"
+                    )
+                    return configured_version
+                else:
+                    self.log.warn(
+                        f"Config specifies PHP {configured_version}, but app requires '{php_constraint}'. "
+                        f"Auto-selecting PHP {best_version} for compatibility."
+                    )
             else:
                 self.log.info(f"Auto-detected PHP version: {best_version}")
             return best_version
@@ -265,6 +272,65 @@ class AppAutoDetector:
     def _highest_version(self, versions: List[str]) -> str:
         """Return the highest version from a list."""
         return sorted(versions, key=self._version_tuple)[-1]
+
+    def _version_satisfies_constraint(self, version: str, constraint: str) -> bool:
+        """Check if a specific PHP version satisfies a composer constraint."""
+        vt = self._version_tuple(version)
+
+        # Handle OR constraints
+        if "|" in constraint:
+            parts = [p.strip() for p in constraint.split("|")]
+            return any(self._version_satisfies_constraint(version, p) for p in parts)
+
+        constraint = constraint.strip()
+
+        # Exact: 8.2.* or 8.2
+        match = re.match(r'^(\d+\.\d+)(?:\.\*)?$', constraint)
+        if match:
+            return vt == self._version_tuple(match.group(1))
+
+        # Major-only: "8" or "8.*"
+        match = re.match(r'^(\d+)(?:\.\*)?$', constraint)
+        if match:
+            return vt[0] == int(match.group(1))
+
+        # Caret: ^8.1 means >=8.1, <9.0  /  ^8 means >=8.0, <9.0
+        match = re.match(r'^\^(\d+)(?:\.(\d+))?', constraint)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2)) if match.group(2) else 0
+            return vt[0] == major and vt >= (major, minor)
+
+        # Tilde: ~8.1 means >=8.1, <9.0
+        match = re.match(r'^~(\d+)(?:\.(\d+))?', constraint)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2)) if match.group(2) else 0
+            return vt[0] == major and vt >= (major, minor)
+
+        # >=8.1 or >=8
+        match = re.match(r'^>=\s*(\d+)(?:\.(\d+))?', constraint)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2)) if match.group(2) else 0
+            return vt >= (major, minor)
+
+        # >8.0 or >8
+        match = re.match(r'^>\s*(\d+)(?:\.(\d+))?', constraint)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2)) if match.group(2) else 0
+            return vt > (major, minor)
+
+        # AND constraints: ">=7.3 <8.0" or ">=7.3,<8.0"
+        parts = re.split(r'[,\s]+', constraint)
+        if len(parts) > 1:
+            return all(
+                self._version_satisfies_constraint(version, p.strip())
+                for p in parts if p.strip()
+            )
+
+        return False
 
     # ── Framework Detection ─────────────────────────────────────
 

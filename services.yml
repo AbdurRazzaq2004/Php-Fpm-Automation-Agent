@@ -8,6 +8,19 @@
 #   ✓ Dependencies (pip, npm, composer, etc.)
 #   ✓ Process manager (systemd, PM2, PHP-FPM)
 #   ✓ Web server config (reverse proxy / FastCGI)
+#
+# ─── Supported Languages ────────────────────────────────────────────────────
+#   language: php        → PHP apps (Laravel, Symfony, WordPress, CodeIgniter)
+#   language: python     → Python apps (Django, Flask, FastAPI)
+#   language: node       → Node.js apps (Express, Koa, NestJS, Fastify)
+#   language: nextjs     → Next.js SSR apps
+#   language: ruby       → Ruby apps (Rails, Sinatra)
+#   language: go         → Go apps (Gin, Echo, Fiber)
+#   language: java       → Java apps (Spring Boot, Quarkus, Micronaut)
+#   language: rust       → Rust apps (Actix, Axum, Rocket)
+#   language: dotnet     → .NET apps (ASP.NET Core)
+#   language: static     → Static sites (React, Vue, Angular, Hugo, Jekyll)
+#   language: auto       → Auto-detect from repository files (default)
 # =============================================================================
 
 service_name: todo-python

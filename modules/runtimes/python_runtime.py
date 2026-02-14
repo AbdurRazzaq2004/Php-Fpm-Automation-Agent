@@ -455,6 +455,18 @@ class PythonRuntime(BaseRuntime):
         elif framework == "fastapi":
             base["entry_point"] = "main.py"
 
+        # Generic DB detection for all Python frameworks (if not already set by Django)
+        if not base["database_driver"]:
+            db = self._detect_python_db(deploy_path)
+            if db:
+                base["database_driver"] = db
+
+        # Extract database credentials from .env.example
+        if base["database_driver"]:
+            creds = self._extract_env_credentials(deploy_path)
+            if creds:
+                base["database_credentials"] = creds
+
         return base
 
     def _detect_django_db(self, deploy_path: str) -> Optional[str]:
@@ -476,3 +488,121 @@ class PythonRuntime(BaseRuntime):
             if depth >= 3:
                 dirs.clear()
         return None
+
+    def _detect_python_db(self, deploy_path: str) -> Optional[str]:
+        """
+        Detect database from Python dependency files (requirements.txt, Pipfile, etc.)
+        and .env.example / config files.
+        """
+        deps_content = self._read_dependencies(deploy_path).lower()
+
+        # Check for PostgreSQL drivers
+        pg_indicators = ["psycopg2", "psycopg", "asyncpg", "aiopg"]
+        for pkg in pg_indicators:
+            if pkg in deps_content:
+                self.log.info(f"Detected PostgreSQL requirement from dependency: {pkg}")
+                return "pgsql"
+
+        # Check for MySQL drivers
+        mysql_indicators = ["pymysql", "mysqlclient", "mysql-connector", "aiomysql"]
+        for pkg in mysql_indicators:
+            if pkg in deps_content:
+                self.log.info(f"Detected MySQL requirement from dependency: {pkg}")
+                return "mysql"
+
+        # Check .env.example for database indicators
+        env_example = os.path.join(deploy_path, ".env.example")
+        if os.path.isfile(env_example):
+            try:
+                with open(env_example, "r", errors="ignore") as f:
+                    env_content = f.read().lower()
+                if "postgresql" in env_content or "db_engine=postgresql" in env_content:
+                    self.log.info("Detected PostgreSQL requirement from .env.example")
+                    return "pgsql"
+                if "mysql" in env_content or "db_engine=mysql" in env_content:
+                    self.log.info("Detected MySQL requirement from .env.example")
+                    return "mysql"
+            except Exception:
+                pass
+
+        # Check config files for SQLAlchemy connection strings
+        for cfg_file in ["config.py", "settings.py", "database.py"]:
+            cfg_path = os.path.join(deploy_path, cfg_file)
+            if os.path.isfile(cfg_path):
+                try:
+                    with open(cfg_path, "r", errors="ignore") as f:
+                        content = f.read().lower()
+                    if "postgresql" in content or "psycopg" in content:
+                        self.log.info(f"Detected PostgreSQL from {cfg_file}")
+                        return "pgsql"
+                    if "mysql" in content:
+                        self.log.info(f"Detected MySQL from {cfg_file}")
+                        return "mysql"
+                except Exception:
+                    pass
+
+        # If SQLAlchemy is present but no specific driver found, check deeper
+        if "sqlalchemy" in deps_content:
+            self.log.info("SQLAlchemy found but no specific DB driver detected")
+
+        return None
+
+    def _extract_env_credentials(self, deploy_path: str) -> Dict:
+        """
+        Extract database credentials from .env.example or .env.sample files.
+        Parses standard DB_* environment variables.
+        """
+        creds = {}
+        env_files = [".env.example", ".env.sample", ".env.template", ".env.dist"]
+
+        env_path = None
+        for ef in env_files:
+            p = os.path.join(deploy_path, ef)
+            if os.path.isfile(p):
+                env_path = p
+                break
+
+        if not env_path:
+            return creds
+
+        try:
+            with open(env_path, "r", errors="ignore") as f:
+                lines = f.readlines()
+        except Exception:
+            return creds
+
+        env_vars = {}
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                env_vars[key.strip().upper()] = value.strip().strip("'\"")
+
+        # Map common env var names to credential keys
+        mappings = {
+            "dbname": ["DB_NAME", "DB_DATABASE", "DATABASE_NAME", "POSTGRES_DB", "MYSQL_DATABASE"],
+            "user": ["DB_USER", "DB_USERNAME", "DATABASE_USER", "POSTGRES_USER", "MYSQL_USER"],
+            "password": ["DB_PASSWORD", "DB_PASS", "DATABASE_PASSWORD", "POSTGRES_PASSWORD", "MYSQL_PASSWORD"],
+            "host": ["DB_HOST", "DATABASE_HOST"],
+            "port": ["DB_PORT", "DATABASE_PORT"],
+        }
+
+        for cred_key, env_keys in mappings.items():
+            for env_key in env_keys:
+                if env_key in env_vars:
+                    val = env_vars[env_key]
+                    # Skip placeholder values
+                    if val and val not in ("your_password_here", "changeme", "secret", "password", ""):
+                        creds[cred_key] = val
+                    elif cred_key in ("dbname", "user", "host", "port") and val:
+                        # Keep non-password defaults even if they look like placeholders
+                        creds[cred_key] = val
+                    break
+
+        if creds:
+            self.log.info(f"Extracted DB credentials from {os.path.basename(env_path)}: "
+                          f"db={creds.get('dbname', '?')}, user={creds.get('user', '?')}")
+
+        return creds

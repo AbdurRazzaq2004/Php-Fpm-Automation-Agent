@@ -437,6 +437,12 @@ class UniversalDeployer:
             # ════════════════════════════════════════════════════
             #   DATABASE PROVISIONING (all languages)
             # ════════════════════════════════════════════════════
+
+            # Auto-generate .env from .env.example BEFORE DB provisioning
+            # so the generated password is shared between .env and DB setup
+            if language != "php" and db_driver:
+                self._auto_generate_env_file(config, db_credentials, log)
+
             if db_driver:
                 if not db_mgr.ensure_database(db_driver, config):
                     log.warn(f"Database setup for {db_driver} had issues — continuing")
@@ -517,6 +523,12 @@ class UniversalDeployer:
 
             # ── Deploy environment file ─────────────────────────
             hooks.setup_environment_file(config)
+
+            # ── Auto-generate .env (non-PHP, no DB) ─────────────
+            # If DB was detected, .env was already generated before DB provisioning.
+            # This handles non-DB Python apps that still need .env from .env.example.
+            if language != "php" and not db_driver:
+                self._auto_generate_env_file(config, db_credentials, log)
 
             # ── Pre-deploy hooks ────────────────────────────────
             if not hooks.run_pre_deploy(config):
@@ -621,6 +633,128 @@ class UniversalDeployer:
             log.critical(f"Unexpected error: {e}")
             log.debug(traceback.format_exc())
             return self._handle_failure(backup, log)
+
+    def _auto_generate_env_file(self, config: dict, db_credentials: dict, log) -> bool:
+        """
+        Auto-generate .env from .env.example with provisioned DB credentials.
+
+        Strategy:
+        1. If .env already exists → skip (don't overwrite user's file)
+        2. If .env.example exists → copy it and replace placeholder values
+        3. Generate secure password for DB if needed
+        4. Update DATABASE_URL and DB_PASSWORD with provisioned values
+        """
+        deploy_path = config["deploy_path"]
+        env_path = os.path.join(deploy_path, ".env")
+        service_name = config.get("service_name", "app")
+
+        # If user specified an environment_file and it was already deployed, skip
+        if os.path.isfile(env_path):
+            log.info("Environment file .env already exists — skipping auto-generation")
+            return True
+
+        # Find .env.example or similar template
+        template_names = [".env.example", ".env.sample", ".env.template", ".env.dist"]
+        template_path = None
+        for tname in template_names:
+            p = os.path.join(deploy_path, tname)
+            if os.path.isfile(p):
+                template_path = p
+                break
+
+        if not template_path:
+            log.debug("No .env template found — skipping auto-generation")
+            return True
+
+        log.step("Auto-generating .env from " + os.path.basename(template_path))
+
+        try:
+            with open(template_path, "r", errors="ignore") as f:
+                content = f.read()
+        except Exception as e:
+            log.warn(f"Could not read {template_path}: {e}")
+            return False
+
+        # Generate a secure password for the database
+        import secrets
+        import string
+        db_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(24))
+
+        # Get DB info from credentials or defaults
+        db_name = db_credentials.get("dbname", service_name.replace("-", "_"))
+        db_user = db_credentials.get("user", "postgres")
+        db_host = db_credentials.get("host", "localhost")
+        db_port = db_credentials.get("port", "5432")
+        db_engine = "postgresql"
+
+        db_driver = config.get("_db_driver")
+        if db_driver in ("mysql", "mariadb"):
+            db_engine = "mysql"
+            db_user = db_credentials.get("user", "root")
+            db_port = db_credentials.get("port", "3306")
+
+        # Store the generated password so provision_database can use it
+        if "password" not in db_credentials or not db_credentials.get("password"):
+            db_credentials["password"] = db_password
+        else:
+            db_password = db_credentials["password"]
+
+        # Ensure dbname/user are set in credentials for provisioning
+        db_credentials.setdefault("dbname", db_name)
+        db_credentials.setdefault("user", db_user)
+        db_credentials.setdefault("host", db_host)
+        db_credentials.setdefault("port", db_port)
+
+        # Replace values in the template
+        replacements = {
+            "DB_HOST": db_host,
+            "DB_PORT": db_port,
+            "DB_NAME": db_name,
+            "DB_DATABASE": db_name,
+            "DB_USER": db_user,
+            "DB_USERNAME": db_user,
+            "DB_PASSWORD": db_password,
+            "DB_PASS": db_password,
+            "DB_ENGINE": db_engine,
+            "DATABASE_URL": f"{db_engine}://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}",
+            "APP_DEBUG": "False",
+        }
+
+        lines = content.splitlines()
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                new_lines.append(line)
+                continue
+
+            if "=" in stripped:
+                key, _, old_val = stripped.partition("=")
+                key = key.strip()
+                if key in replacements:
+                    new_lines.append(f"{key}={replacements[key]}")
+                    continue
+
+            new_lines.append(line)
+
+        env_content = "\n".join(new_lines) + "\n"
+
+        try:
+            with open(env_path, "w") as f:
+                f.write(env_content)
+            os.chmod(env_path, 0o600)
+
+            user = config.get("user", "root")
+            group = config.get("group", "www-data")
+            subprocess.run(
+                f"chown {user}:{group} '{env_path}'",
+                shell=True, capture_output=True
+            )
+            log.success(f"Generated .env with provisioned credentials (db={db_name}, user={db_user})")
+            return True
+        except Exception as e:
+            log.error(f"Failed to write .env: {e}")
+            return False
 
     def _detect_pgsql_dbname(self, deploy_path: str) -> Optional[str]:
         """

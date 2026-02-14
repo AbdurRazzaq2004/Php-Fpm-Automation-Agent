@@ -182,11 +182,12 @@ class ValidationEngine:
 
             # Check if systemd service is active (for non-static apps)
             if language != "static":
-                rc, out, _ = self._run(f"systemctl is-active {service_name} 2>/dev/null")
+                svc_name = config.get("systemd_service", f"app-{service_name}")
+                rc, out, _ = self._run(f"systemctl is-active {svc_name} 2>/dev/null")
                 if rc == 0 and "active" in out:
-                    self._pass(f"Service {service_name} is active")
+                    self._pass(f"Service {svc_name} is active")
                 else:
-                    self._warn(f"Service {service_name} may not be running yet")
+                    self._warn(f"Service {svc_name} may not be running yet")
 
         # 6. Check web server config
         if web_server == "nginx":

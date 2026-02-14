@@ -84,13 +84,17 @@ class ValidationEngine:
         else:
             self._pass(f"Deploy path is clear: {config['deploy_path']}")
 
-        # 5. Check socket conflicts
-        socket_path = config["fpm_socket"]
-        existing_sockets = self.system.get_existing_fpm_sockets()
-        if socket_path in existing_sockets:
-            self._warn(f"FPM socket already exists (will be replaced): {socket_path}")
+        # 5. Check socket conflicts (PHP only)
+        language = config.get("language", "php")
+        if language == "php":
+            socket_path = config.get("fpm_socket", "")
+            existing_sockets = self.system.get_existing_fpm_sockets()
+            if socket_path in existing_sockets:
+                self._warn(f"FPM socket already exists (will be replaced): {socket_path}")
+            else:
+                self._pass(f"No socket conflict: {socket_path}")
         else:
-            self._pass(f"No socket conflict: {socket_path}")
+            self._pass(f"Non-PHP runtime ({language}) — FPM socket check skipped")
 
         # 6. Check domain DNS (optional, non-blocking)
         self._check_dns(config["domain"])
@@ -132,7 +136,7 @@ class ValidationEngine:
 
         service_name = config["service_name"]
         web_server = config.get("web_server", "nginx")
-        php_version = config["php_version"]
+        language = config.get("language", "php")
 
         # 1. Check deploy path exists and has files
         deploy_path = config["deploy_path"]
@@ -141,34 +145,48 @@ class ValidationEngine:
         else:
             self._fail(f"Deploy path empty or missing: {deploy_path}")
 
-        # 2. Check index.php exists (in document_root)
-        doc_root = config["document_root"]
-        index_file = os.path.join(doc_root, "index.php")
-        if os.path.isfile(index_file):
-            self._pass(f"index.php exists in document root")
-        else:
-            self._warn(f"index.php not found in {doc_root}")
+        if language == "php":
+            php_version = config.get("php_version", "8.2")
 
-        # 3. Check PHP-FPM pool config
-        pool_config = config["fpm_pool_config"]
-        if os.path.isfile(pool_config):
-            self._pass(f"FPM pool config exists: {pool_config}")
-        else:
-            self._fail(f"FPM pool config missing: {pool_config}")
+            # 2. Check index.php exists (in document_root)
+            doc_root = config["document_root"]
+            index_file = os.path.join(doc_root, "index.php")
+            if os.path.isfile(index_file):
+                self._pass(f"index.php exists in document root")
+            else:
+                self._warn(f"index.php not found in {doc_root}")
 
-        # 4. Check PHP-FPM is running
-        fpm_service = self.system.get_php_fpm_service_name(php_version)
-        if self.system.is_php_fpm_running(php_version):
-            self._pass(f"{fpm_service} is running")
-        else:
-            self._fail(f"{fpm_service} is NOT running")
+            # 3. Check PHP-FPM pool config
+            pool_config = config.get("fpm_pool_config", "")
+            if pool_config and os.path.isfile(pool_config):
+                self._pass(f"FPM pool config exists: {pool_config}")
+            else:
+                self._fail(f"FPM pool config missing: {pool_config}")
 
-        # 5. Check FPM socket exists
-        socket_path = config["fpm_socket"]
-        if os.path.exists(socket_path):
-            self._pass(f"FPM socket exists: {socket_path}")
+            # 4. Check PHP-FPM is running
+            fpm_service = self.system.get_php_fpm_service_name(php_version)
+            if self.system.is_php_fpm_running(php_version):
+                self._pass(f"{fpm_service} is running")
+            else:
+                self._fail(f"{fpm_service} is NOT running")
+
+            # 5. Check FPM socket exists
+            socket_path = config.get("fpm_socket", "")
+            if socket_path and os.path.exists(socket_path):
+                self._pass(f"FPM socket exists: {socket_path}")
+            else:
+                self._fail(f"FPM socket missing: {socket_path}")
         else:
-            self._fail(f"FPM socket missing: {socket_path}")
+            # Non-PHP: check for app entry point and process running
+            self._pass(f"Non-PHP runtime ({language}) — FPM checks skipped")
+
+            # Check if systemd service is active (for non-static apps)
+            if language != "static":
+                rc, out, _ = self._run(f"systemctl is-active {service_name} 2>/dev/null")
+                if rc == 0 and "active" in out:
+                    self._pass(f"Service {service_name} is active")
+                else:
+                    self._warn(f"Service {service_name} may not be running yet")
 
         # 6. Check web server config
         if web_server == "nginx":

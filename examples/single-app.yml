@@ -1,34 +1,47 @@
 # ============================================================
 # PHP-FPM Automation Agent - Single Application Example
 # ============================================================
-# Deploy a single PHP application with Nginx and PHP 8.2
+# Deploy a single PHP application with smart auto-detection.
+#
+# The agent automatically detects:
+#   - PHP version from composer.json
+#   - Framework type (Laravel, Symfony, WordPress, etc.)
+#   - Database driver (MySQL, PostgreSQL, SQLite)
+#   - Required PHP extensions
+#   - Document root and post-deploy commands
 #
 # Usage:
 #   sudo python3 deployer.py deploy --config examples/single-app.yml
 # ============================================================
 
+# ── Required Fields ─────────────────────────────────────────
 service_name: my-php-app
 domain: app.example.com
 repo_url: https://github.com/your-org/your-app.git
-branch: main
+branch: main                    # IMPORTANT: specify the correct branch!
 deploy_path: /var/www/my-php-app
-php_version: "8.2"
-web_server: nginx
 
-# PHP Extensions to install
-php_extensions:
-  - cli
-  - fpm
-  - common
-  - curl
-  - mbstring
-  - xml
-  - zip
-  - mysql
-  - opcache
-  - gd
-  - intl
-  - bcmath
+# ── Auto-Detection ──────────────────────────────────────────
+auto_detect: true               # Detects PHP version, framework, DB, extensions
+
+# ── Optional Overrides (uncomment to override auto-detection) ─
+# php_version: "8.2"            # Override auto-detected PHP version
+# document_root_suffix: /public # Override auto-detected document root
+# php_extensions:               # Override auto-detected extensions
+#   - cli
+#   - fpm
+#   - common
+#   - curl
+#   - mbstring
+#   - xml
+#   - zip
+#   - mysql
+#   - opcache
+#   - gd
+#   - intl
+#   - bcmath
+
+web_server: nginx
 
 # Private repo? Add your PAT token
 # pat_token: ghp_xxxxxxxxxxxxxxxxxxxx
@@ -47,6 +60,6 @@ php_pool_start_servers: 2
 php_pool_min_spare: 1
 php_pool_max_spare: 4
 
-# Post-deploy commands (run as service user)
-post_deploy_commands:
-  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+# Post-deploy commands (leave empty for auto-detected framework commands)
+# post_deploy_commands:
+#   - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"

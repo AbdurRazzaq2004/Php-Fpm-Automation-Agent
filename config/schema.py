@@ -3,6 +3,13 @@ Config Schema - PHP-FPM Automation Agent
 ==========================================
 Defines the YAML configuration schema, defaults, and
 allowed values for all service configuration fields.
+
+Smart Defaults:
+- PHP version: auto-detected from composer.json if not specified
+- Document root: auto-detected from framework type
+- PHP extensions: auto-detected from composer.json + framework
+- Database: auto-detected from framework config
+- Post-deploy commands: auto-generated for known frameworks
 """
 
 from typing import Any, Dict, List
@@ -25,17 +32,18 @@ COMMON_PHP_EXTENSIONS = [
 
 SERVICE_DEFAULTS: Dict[str, Any] = {
     "branch": "main",
-    "php_version": "8.2",
+    "php_version": "8.2",       # Will be overridden by auto-detection
     "web_server": "nginx",
     "php_extensions": ["cli", "fpm", "common", "curl", "mbstring", "xml", "zip", "mysql", "opcache"],
     "enable_ssl": False,
-    "user": None,           # Will be auto-generated: svc_<service_name>
+    "auto_detect": True,        # Auto-detect PHP version, framework, DB, extensions
+    "user": None,               # Will be auto-generated: svc_<service_name>
     "group": "www-data",
     "environment_file": None,
     "pat_token": None,
     "extra_nginx_config": "",
     "extra_apache_config": "",
-    "document_root_suffix": "",  # e.g., "/public" for Laravel
+    "document_root_suffix": "",  # Auto-detected if empty (e.g., "/public" for Laravel)
     "max_upload_size": "64M",
     "php_memory_limit": "256M",
     "php_max_execution_time": 300,
@@ -47,19 +55,26 @@ SERVICE_DEFAULTS: Dict[str, Any] = {
     "ssl_cert_path": None,
     "ssl_key_path": None,
     "pre_deploy_commands": [],
-    "post_deploy_commands": [],
-    "shared_dirs": [],       # Directories preserved across deployments
-    "writable_dirs": [],     # Directories that need write permissions
-    "cron_jobs": [],         # Cron entries for this service
+    "post_deploy_commands": [],  # Auto-generated for known frameworks if empty
+    "shared_dirs": [],           # Directories preserved across deployments
+    "writable_dirs": [],         # Directories that need write permissions
+    "cron_jobs": [],             # Cron entries for this service
 }
 
 # ── Required Fields ─────────────────────────────────────────────
 
+# Note: php_version is NOT required — it can be auto-detected from composer.json
 REQUIRED_FIELDS = [
     "service_name",
     "domain",
     "repo_url",
     "deploy_path",
+]
+
+# Fields that are strongly recommended but will use smart defaults
+RECOMMENDED_FIELDS = [
+    "branch",           # Default: "main", but many repos use "master" or version branches
+    "php_version",      # Default: auto-detected from composer.json, fallback to 8.2
 ]
 
 # ── Field Validators ────────────────────────────────────────────
@@ -88,7 +103,8 @@ FIELD_VALIDATORS = {
     "php_version": {
         "type": str,
         "allowed": SUPPORTED_PHP_VERSIONS,
-        "description": f"One of: {', '.join(SUPPORTED_PHP_VERSIONS)}",
+        "description": f"Optional. Auto-detected from composer.json. One of: {', '.join(SUPPORTED_PHP_VERSIONS)}",
+        "optional": True,
     },
     "web_server": {
         "type": str,
@@ -97,7 +113,11 @@ FIELD_VALIDATORS = {
     },
     "branch": {
         "type": str,
-        "description": "Git branch name",
+        "description": "Git branch name (e.g., main, master, 11.x, develop). IMPORTANT: specify the correct branch!",
+    },
+    "auto_detect": {
+        "type": bool,
+        "description": "Enable auto-detection of PHP version, framework, DB, and extensions from code",
     },
     "enable_ssl": {
         "type": bool,
@@ -105,7 +125,7 @@ FIELD_VALIDATORS = {
     },
     "php_extensions": {
         "type": list,
-        "description": "List of PHP extensions to install",
+        "description": "List of PHP extensions to install (auto-detected if empty)",
     },
     "max_upload_size": {
         "type": str,
@@ -124,6 +144,6 @@ FIELD_VALIDATORS = {
     },
     "post_deploy_commands": {
         "type": list,
-        "description": "Shell commands to run after deployment (e.g., composer install)",
+        "description": "Shell commands to run after deployment (auto-generated for known frameworks if empty)",
     },
 }

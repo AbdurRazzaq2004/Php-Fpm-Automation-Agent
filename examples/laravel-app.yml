@@ -1,48 +1,46 @@
 # ============================================================
 # PHP-FPM Automation Agent - Laravel Application Example
 # ============================================================
-# Deploy a Laravel application with all best practices:
-#   - public/ as document root
-#   - Storage and cache directories writable
-#   - Shared storage across deployments
-#   - Artisan commands in post-deploy
-#   - Scheduled tasks via cron
+# Deploy a Laravel application with smart auto-detection.
+#
+# The agent automatically handles Laravel apps:
+#   - Detects PHP version from composer.json
+#   - Sets document root to /public
+#   - Installs required PHP extensions (including DB driver)
+#   - Detects database driver from .env / config/database.php
+#   - Installs & configures the database engine safely
+#   - Runs artisan commands (key:generate, migrate, cache, etc.)
+#   - Sets storage & cache directories writable
+#   - Installs Composer (latest from getcomposer.org)
+#
+# MINIMAL CONFIG — auto-detect handles the rest:
+#   service_name: laravel-app
+#   domain: laravel.example.com
+#   repo_url: https://github.com/your-org/laravel-project.git
+#   branch: main
+#   deploy_path: /var/www/laravel-app
 #
 # Usage:
 #   sudo python3 deployer.py deploy --config examples/laravel-app.yml
 # ============================================================
 
+# ── Required Fields ─────────────────────────────────────────
 service_name: laravel-app
 domain: laravel.example.com
 repo_url: https://github.com/your-org/laravel-project.git
-branch: main
+branch: main                    # Specify the correct branch (main, master, develop, etc.)
 deploy_path: /var/www/laravel-app
-php_version: "8.2"
+
+# ── Auto-Detection (detects PHP ver, framework, DB, extensions) ──
+auto_detect: true
+
+# ── Optional Overrides ─────────────────────────────────────
+# Uncomment these only if you want to override auto-detection:
+# php_version: "8.2"
+# document_root_suffix: "public"         # Auto-detected for Laravel
+# php_extensions: [cli, fpm, ...]        # Auto-detected from composer.json
+
 web_server: nginx
-
-# Laravel uses public/ as document root
-document_root_suffix: "public"
-
-# PHP Extensions required by Laravel
-php_extensions:
-  - cli
-  - fpm
-  - common
-  - curl
-  - mbstring
-  - xml
-  - zip
-  - mysql
-  - opcache
-  - gd
-  - intl
-  - bcmath
-  - redis
-  - tokenizer
-  - fileinfo
-  - dom
-  - pdo
-  - pdo_mysql
 
 # Private repo access
 # pat_token: ghp_xxxxxxxxxxxxxxxxxxxx
@@ -65,32 +63,32 @@ php_pool_min_spare: 2
 php_pool_max_spare: 8
 php_pool_max_requests: 500
 
-# Directories that need write permissions
-writable_dirs:
-  - "storage"
-  - "storage/app"
-  - "storage/app/public"
-  - "storage/framework"
-  - "storage/framework/cache"
-  - "storage/framework/sessions"
-  - "storage/framework/views"
-  - "storage/logs"
-  - "bootstrap/cache"
+# Writable dirs (auto-detected for Laravel, but you can customize)
+# writable_dirs:
+#   - "storage"
+#   - "bootstrap/cache"
 
 # Directories that persist across deployments
 shared_dirs:
   - "storage/app/public"
   - "storage/logs"
 
-# Post-deploy commands
-post_deploy_commands:
-  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
-  - "php artisan key:generate --force"
-  - "php artisan migrate --force"
-  - "php artisan config:cache"
-  - "php artisan route:cache"
-  - "php artisan view:cache"
-  - "php artisan storage:link"
+# Post-deploy commands (leave empty for auto-detected Laravel commands)
+# The agent auto-generates these for Laravel:
+#   - cp .env.example .env (if .env doesn't exist)
+#   - composer install
+#   - php artisan key:generate
+#   - touch database/database.sqlite (if using SQLite)
+#   - php artisan migrate --force
+#   - php artisan config:cache
+#   - php artisan route:cache
+#   - php artisan view:cache
+#   - php artisan storage:link
+#
+# Override with your own commands:
+# post_deploy_commands:
+#   - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+#   - "php artisan migrate --force"
 
 # Laravel scheduler cron
 cron_jobs:

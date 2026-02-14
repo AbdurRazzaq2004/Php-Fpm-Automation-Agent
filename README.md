@@ -4,10 +4,13 @@
 
 Safely deploy multiple PHP applications on the same server with isolated PHP-FPM pools, automatic web server configuration, and zero-downtime reloads.
 
+**Now with Smart Auto-Detection** — the agent reads your `composer.json` and automatically configures PHP version, extensions, database, and framework-specific settings. Deploy any PHP app with just 4 lines of config!
+
 ---
 
 ## Table of Contents
 
+- [Smart Auto-Detection](#smart-auto-detection)
 - [Architecture Overview](#architecture-overview)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -23,6 +26,56 @@ Safely deploy multiple PHP applications on the same server with isolated PHP-FPM
 - [Extending the Agent](#extending-the-agent)
 - [Troubleshooting](#troubleshooting)
 - [File Structure](#file-structure)
+
+---
+
+## Smart Auto-Detection
+
+The agent intelligently analyzes your repository after cloning and automatically configures the deployment. **No PHP or framework expertise required!**
+
+### What Gets Auto-Detected
+
+| Feature | How It Works |
+|---------|-------------|
+| **PHP Version** | Reads `require.php` from `composer.json` (supports `^8.2`, `>=8.1`, `~7.4`, `7.4\|8.0\|8.1` constraints) |
+| **Framework** | Detects Laravel, Symfony, WordPress, CodeIgniter, Slim from dependencies |
+| **Database** | Reads `.env`, `.env.example`, `config/database.php` to find MySQL/PostgreSQL/SQLite |
+| **PHP Extensions** | Merges `ext-*` from `composer.json` + framework requirements + DB driver extensions |
+| **Document Root** | Auto-sets `/public` for Laravel/Symfony, `/web` for Symfony 4+ |
+| **Post-Deploy Commands** | Generates framework-specific commands (artisan, composer, migrations, caching) |
+| **Writable Directories** | Sets `storage/`, `bootstrap/cache/` for Laravel, `var/` for Symfony |
+| **Composer** | Installs latest Composer from getcomposer.org if missing or outdated |
+| **Branch** | Detects default branch from remote if specified branch doesn't exist |
+
+### Minimal Config (Auto-Detection Handles the Rest)
+
+```yaml
+service_name: my-app
+domain: app.example.com
+repo_url: https://github.com/your-org/your-app.git
+branch: main
+deploy_path: /var/www/my-app
+```
+
+That's it! The agent will:
+1. Clone the repo
+2. Read `composer.json` → detect PHP 8.2 is required
+3. Detect it's a Laravel app → set document root to `/public`
+4. Find `ext-bcmath`, `ext-mbstring` in composer.json → install those extensions
+5. Detect SQLite from `.env` → install php-sqlite3 + create database file
+6. Install latest Composer from getcomposer.org
+7. Generate post-deploy commands: `composer install`, `artisan key:generate`, `artisan migrate`, cache commands
+8. Set `storage/` and `bootstrap/cache/` writable
+9. Configure PHP-FPM pool + Nginx vhost
+10. Verify everything works with health checks
+
+### Database Safety
+
+The agent **never overwrites existing databases**:
+- Checks for pre-installed MySQL/MariaDB, PostgreSQL, and SQLite
+- Only installs a new database engine if none exists for that type
+- Never drops databases or removes data
+- Creates SQLite database files only if they don't exist
 
 ---
 
@@ -61,10 +114,29 @@ Safely deploy multiple PHP applications on the same server with isolated PHP-FPM
    ┌────────────┐ ┌──────────┐ ┌─────────────┐
    │  Package   │ │   Git    │ │   Backup    │
    │ Installer  │ │ Manager  │ │  Manager    │
-   │ (idempot.) │ │ (PAT)    │ │ (rollback)  │
+   │ (idempot.) │ │ (PAT+    │ │ (rollback)  │
+   │            │ │ branch   │ │             │
+   │            │ │ detect)  │ │             │
    └─────┬──────┘ └────┬─────┘ └──────┬──────┘
          │             │              │
          ▼             ▼              ▼
+┌─────────────────────────────────────────────────────────────┐
+│           ★ Smart Auto-Detection Phase ★                    │
+│  ┌──────────────┐ ┌────────────┐ ┌───────────────────────┐  │
+│  │ PHP Version  │ │ Framework  │ │ Database Driver      │  │
+│  │ Detection    │ │ Detection  │ │ Detection            │  │
+│  │(composer.json│ │(Laravel,   │ │(.env, config/*.php)  │  │
+│  │ constraints) │ │ Symfony,..)│ │                      │  │
+│  └──────────────┘ └────────────┘ └───────────────────────┘  │
+│  ┌──────────────┐ ┌────────────┐ ┌───────────────────────┐  │
+│  │  Extension   │ │ Composer   │ │ Database Engine      │  │
+│  │  Merging     │ │ Installer  │ │ (safe: never         │  │
+│  │(composer.json│ │ (latest    │ │  overwrites)         │  │
+│  │ + framework) │ │ official)  │ │                      │  │
+│  └──────────────┘ └────────────┘ └───────────────────────┘  │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
 ┌─────────────────────────────────────────────────────────────┐
 │               Deployment Engine (per service)               │
 │  ┌──────────┐ ┌──────────────┐ ┌─────────────────────────┐  │
@@ -82,6 +154,12 @@ Safely deploy multiple PHP applications on the same server with isolated PHP-FPM
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
+│          ★ Smart Post-Deploy (framework-aware) ★            │
+│   Auto-generated commands │ Writable dirs │ DB setup         │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
 │             Validation Engine (Post-deploy)                  │
 │   Service check │ Socket check │ HTTP health │ Permissions   │
 └─────────────────────────────────────────────────────────────┘
@@ -90,6 +168,15 @@ Safely deploy multiple PHP applications on the same server with isolated PHP-FPM
 ---
 
 ## Features
+
+### Smart Auto-Detection
+- **PHP version detection** — reads `composer.json` constraints (`^8.2`, `>=8.1`, etc.)
+- **Framework detection** — Laravel, Symfony, WordPress, CodeIgniter, Slim
+- **Database detection** — MySQL, PostgreSQL, SQLite from `.env` / config files
+- **Extension auto-merge** — combines composer.json `ext-*` + framework + DB extensions
+- **Smart branch handling** — detects default branch, falls back if specified branch missing
+- **Composer management** — installs latest from getcomposer.org (not broken apt version)
+- **Database safety** — detects pre-installed databases, never overwrites existing data
 
 ### Core Capabilities
 - **YAML-driven** — define services declaratively, deploy with one command
@@ -707,19 +794,21 @@ php-fpm-automation/
 │   ├── system.py            # OS/software detection (non-destructive)
 │   ├── backup.py            # Backup & rollback manager
 │   ├── packages.py          # Idempotent package installer
-│   ├── git.py               # Secure git operations (PAT support)
+│   ├── git.py               # Secure git operations (PAT + smart branch)
 │   ├── phpfpm.py            # PHP-FPM pool manager
 │   ├── nginx.py             # Nginx vhost generator
 │   ├── apache.py            # Apache vhost generator
 │   ├── ssl.py               # SSL/TLS certificate manager
 │   ├── permissions.py       # File ownership & permissions
 │   ├── hooks.py             # Pre/post deploy hooks runner
-│   └── validation.py        # Pre-flight & post-deploy checks
+│   ├── validation.py        # Pre-flight & post-deploy checks
+│   ├── autodetect.py        # ★ Smart PHP/framework/DB auto-detection
+│   └── database.py          # ★ Safe database & Composer management
 │
 └── examples/
-    ├── single-app.yml       # Single PHP app deployment
+    ├── single-app.yml       # Single PHP app (minimal config)
     ├── multi-app.yml        # Multiple apps on same server
-    ├── laravel-app.yml      # Laravel with all best practices
+    ├── laravel-app.yml      # Laravel with auto-detection
     ├── wordpress-app.yml    # WordPress with Apache
     └── mixed-stack.yml      # Mixed PHP versions + web servers
 ```

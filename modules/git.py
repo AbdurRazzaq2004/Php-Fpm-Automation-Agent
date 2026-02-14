@@ -2,13 +2,18 @@
 Git Clone Module - PHP-FPM Automation Agent
 =============================================
 Secure repository cloning with PAT support,
-branch handling, and update detection.
+smart branch handling, and update detection.
+
+Smart Branch Features:
+- Auto-detects default branch from remote (main vs master vs develop)
+- Falls back gracefully when specified branch doesn't exist
+- Lists available branches on failure for user guidance
 """
 
 import os
 import subprocess
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse, quote
 
 from modules.logger import DeployLogger
@@ -18,6 +23,7 @@ class GitManager:
     """
     Manages Git operations:
     - Clone private repos using PAT tokens
+    - **Smart branch detection and fallback**
     - Branch checkout and switching
     - Pull/update existing repos
     - Shallow clone for faster initial deployment
@@ -76,6 +82,67 @@ class GitManager:
 
     # ── Clone Operations ────────────────────────────────────────
 
+    def detect_default_branch(self, repo_url: str, pat_token: Optional[str] = None) -> str:
+        """
+        Detect the default branch of a remote repository.
+        Uses `git ls-remote --symref` to find HEAD target.
+        Falls back to checking main/master if that fails.
+        """
+        auth_url = self._build_auth_url(repo_url, pat_token)
+
+        # Try ls-remote --symref to get the symbolic HEAD
+        rc, out, _ = self._run(
+            f"git ls-remote --symref '{auth_url}' HEAD",
+            env={"GIT_TERMINAL_PROMPT": "0"}
+        )
+        if rc == 0 and out:
+            # Parse: ref: refs/heads/main	HEAD
+            match = re.search(r"ref: refs/heads/(\S+)\s+HEAD", out)
+            if match:
+                branch = match.group(1)
+                self.log.info(f"Detected default branch from remote: {branch}")
+                return branch
+
+        # Fallback: check if main or master exists
+        for candidate in ["main", "master"]:
+            rc, _, _ = self._run(
+                f"git ls-remote --exit-code '{auth_url}' refs/heads/{candidate}",
+                env={"GIT_TERMINAL_PROMPT": "0"}
+            )
+            if rc == 0:
+                self.log.info(f"Detected branch '{candidate}' exists on remote")
+                return candidate
+
+        self.log.warn("Could not detect default branch, using 'main'")
+        return "main"
+
+    def list_remote_branches(self, repo_url: str, pat_token: Optional[str] = None) -> List[str]:
+        """List all branches available on the remote repository."""
+        auth_url = self._build_auth_url(repo_url, pat_token)
+        rc, out, _ = self._run(
+            f"git ls-remote --heads '{auth_url}'",
+            env={"GIT_TERMINAL_PROMPT": "0"}
+        )
+        if rc != 0 or not out:
+            return []
+
+        branches = []
+        for line in out.strip().split("\n"):
+            match = re.search(r"refs/heads/(.+)$", line)
+            if match:
+                branches.append(match.group(1))
+        return branches
+
+    def verify_branch_exists(self, repo_url: str, branch: str,
+                             pat_token: Optional[str] = None) -> bool:
+        """Check if a specific branch exists on the remote."""
+        auth_url = self._build_auth_url(repo_url, pat_token)
+        rc, _, _ = self._run(
+            f"git ls-remote --exit-code '{auth_url}' refs/heads/{branch}",
+            env={"GIT_TERMINAL_PROMPT": "0"}
+        )
+        return rc == 0
+
     def clone(self, config: Dict) -> bool:
         """
         Clone a repository to the deploy path.
@@ -83,6 +150,7 @@ class GitManager:
         - Fresh clone (deploy_path doesn't exist)
         - Update existing repo (pull latest)
         - Branch switching
+        - **Smart branch fallback when specified branch doesn't exist**
         """
         repo_url = config["repo_url"]
         deploy_path = config["deploy_path"]
@@ -94,6 +162,29 @@ class GitManager:
 
         # Build authenticated URL
         auth_url = self._build_auth_url(repo_url, pat_token)
+
+        # ── Smart branch handling ───────────────────────────────
+        # If the user specified the default "main" but it doesn't exist,
+        # auto-detect the real default branch
+        if not self.verify_branch_exists(repo_url, branch, pat_token):
+            self.log.warn(f"Branch '{branch}' does not exist on remote!")
+            
+            # Auto-detect the default branch
+            detected = self.detect_default_branch(repo_url, pat_token)
+            if detected != branch:
+                self.log.info(f"Switching to detected default branch: '{detected}'")
+                config["branch"] = detected
+                branch = detected
+            else:
+                # List available branches for debugging
+                available = self.list_remote_branches(repo_url, pat_token)
+                if available:
+                    self.log.info(f"Available branches: {', '.join(available[:20])}")
+                self.log.error(
+                    f"Branch '{branch}' not found. Please specify a valid branch "
+                    f"in your services.yml configuration."
+                )
+                return False
 
         # Check if deploy path already has a git repo
         git_dir = os.path.join(deploy_path, ".git")

@@ -1,50 +1,47 @@
 # =============================================================================
-# PHP-FPM Automation Agent — Deployment Config for Laravel app
+# PHP-FPM Automation Agent — Smart Deployment Config
+# =============================================================================
+# The agent auto-detects most settings from your repository's composer.json:
+#   - PHP version (from "require.php" constraint)
+#   - Framework type (Laravel, Symfony, WordPress, etc.)
+#   - Database driver (MySQL, PostgreSQL, SQLite)
+#   - Required PHP extensions (ext-* in composer.json)
+#   - Document root (e.g., /public for Laravel)
+#   - Post-deploy commands (artisan commands for Laravel, etc.)
+#
+# You only NEED to specify: service_name, domain, repo_url, deploy_path
+# Everything else has smart defaults or is auto-detected!
 # =============================================================================
 
 service_name: my-php-app
 domain: 98.81.165.46
 repo_url: https://github.com/laravel/laravel.git
-branch: 11.x
+branch: 11.x                    # IMPORTANT: specify the correct branch!
 deploy_path: /var/www/my-php-app
-document_root_suffix: /public
 
-php_version: "8.2"
+# ── Auto-Detection (enabled by default) ─────────────────────────
+auto_detect: true               # Auto-detect PHP version, framework, DB, extensions
+
+# ── Optional Overrides (uncomment to override auto-detection) ───
+# php_version: "8.2"            # Auto-detected from composer.json if omitted
+# document_root_suffix: /public # Auto-detected for Laravel/Symfony
+# php_extensions: [...]         # Auto-detected from composer.json + framework
+
 web_server: nginx
-
-php_extensions:
-  - cli
-  - fpm
-  - common
-  - curl
-  - mbstring
-  - xml
-  - zip
-  - mysql
-  - opcache
-  - redis
-  - bcmath
-  - tokenizer
-  - fileinfo
-  - sqlite3
-
 enable_ssl: false
 
+# ── PHP-FPM Tuning ──────────────────────────────────────────────
 max_upload_size: "64M"
 php_memory_limit: "256M"
 php_max_execution_time: 300
-
 php_pool_max_children: 10
 php_pool_start_servers: 2
 php_pool_min_spare: 1
 php_pool_max_spare: 4
 
-post_deploy_commands:
-  - "cp .env.example .env"
-  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
-  - "php artisan key:generate --force"
-  - "touch database/database.sqlite"
-  - "php artisan migrate --force"
-  - "php artisan config:cache"
-  - "php artisan route:cache"
-  - "php artisan view:cache"
+# ── Post-Deploy Commands ────────────────────────────────────────
+# Leave empty to use auto-detected framework commands.
+# Specify your own to override auto-detection.
+# post_deploy_commands:
+#   - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+#   - "php artisan migrate --force"

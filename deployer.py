@@ -43,6 +43,8 @@ from modules.ssl import SSLManager
 from modules.permissions import PermissionsManager
 from modules.validation import ValidationEngine
 from modules.hooks import HooksRunner
+from modules.autodetect import AppAutoDetector
+from modules.database import DatabaseManager
 
 
 class PHPDeployer:
@@ -58,19 +60,28 @@ class PHPDeployer:
     5.  Install missing packages (idempotent)
     6.  Create service user (if needed)
     7.  Clone/update repository
-    8.  Deploy environment file
-    9.  Run pre-deploy hooks
-    10. Create PHP-FPM pool configuration
-    11. Generate web server vhost
-    12. Set file permissions
-    13. Setup SSL (if enabled)
-    14. Validate all configurations
-    15. Reload PHP-FPM (safe)
-    16. Reload web server (safe: test → reload)
-    17. Run post-deploy hooks (composer install, etc.)
-    18. Post-deployment health checks
-    19. Save backup manifest
-    20. Print deployment summary
+    8.  ** AUTO-DETECT app requirements **
+        - PHP version from composer.json
+        - Framework type (Laravel, Symfony, etc.)
+        - Database driver requirements
+        - Required PHP extensions
+    9.  ** Install correct PHP version (auto-detected) **
+    10. ** Ensure Composer (latest from getcomposer.org) **
+    11. ** Ensure database engine (safe: never overwrite) **
+    12. Deploy environment file
+    13. Run pre-deploy hooks
+    14. Create PHP-FPM pool configuration
+    15. Generate web server vhost
+    16. Set file permissions
+    17. Setup SSL (if enabled)
+    18. Validate all configurations
+    19. Reload PHP-FPM (safe)
+    20. Reload web server (safe: test → reload)
+    21. Run post-deploy hooks (composer install, etc.)
+    22. Fix framework-specific permissions
+    23. Post-deployment health checks
+    24. Save backup manifest
+    25. Print deployment summary
     ───────────────────────────────────────────────
 
     On failure: automatic rollback to backed-up state.
@@ -162,6 +173,8 @@ class PHPDeployer:
             hooks = HooksRunner(log)
             validator = ValidationEngine(system, log)
             ssl_mgr = SSLManager(system, log)
+            autodetect = AppAutoDetector(log)
+            db_mgr = DatabaseManager(system, log)
 
             web_server = config.get("web_server", "nginx")
             if web_server == "nginx":
@@ -184,12 +197,7 @@ class PHPDeployer:
                 log.error("Failed to install system utilities")
                 return self._handle_failure(backup, log)
 
-            # ── Install PHP ─────────────────────────────────────
-            if not installer.install_php(config["php_version"], config["php_extensions"]):
-                log.error("Failed to install PHP")
-                return self._handle_failure(backup, log)
-
-            # ── Install web server ──────────────────────────────
+            # ── Install web server (before PHP to avoid conflicts) ─
             if web_server == "nginx":
                 if not installer.install_nginx():
                     log.error("Failed to install Nginx")
@@ -211,6 +219,82 @@ class PHPDeployer:
             if not git.clone(config):
                 log.error("Git clone/update failed")
                 return self._handle_failure(backup, log)
+
+            # ════════════════════════════════════════════════════
+            #   AUTO-DETECTION PHASE
+            # ════════════════════════════════════════════════════
+            log.banner("AUTO-DETECTING APP REQUIREMENTS")
+
+            # Detect PHP version from composer.json
+            detected_php = autodetect.detect_php_version(
+                config["deploy_path"], config.get("php_version")
+            )
+            if detected_php != config.get("php_version"):
+                log.info(
+                    f"Adjusting PHP version: {config.get('php_version')} → {detected_php}"
+                )
+                config["php_version"] = detected_php
+                # Update derived paths
+                config["fpm_socket"] = (
+                    f"/run/php/php{detected_php}-fpm-{service_name}.sock"
+                )
+                config["fpm_pool_config"] = (
+                    f"/etc/php/{detected_php}/fpm/pool.d/{service_name}.conf"
+                )
+
+            # Detect framework and requirements
+            framework_info = autodetect.detect_framework(config["deploy_path"])
+            log.info(f"Detected framework: {framework_info['name']}")
+
+            # Auto-set document_root_suffix if not explicitly configured
+            if not config.get("document_root_suffix") and framework_info.get("document_root_suffix"):
+                config["document_root_suffix"] = framework_info["document_root_suffix"]
+                config["document_root"] = (
+                    f"{config['deploy_path']}{framework_info['document_root_suffix']}"
+                )
+                log.info(f"Auto-set document root: {config['document_root']}")
+
+            # Merge auto-detected extensions with configured ones
+            composer_extensions = autodetect.detect_required_extensions(config["deploy_path"])
+            framework_extensions = framework_info.get("extra_extensions", [])
+            all_extensions = list(set(
+                config.get("php_extensions", []) +
+                composer_extensions +
+                framework_extensions
+            ))
+            config["php_extensions"] = all_extensions
+            log.info(f"PHP extensions: {', '.join(sorted(all_extensions))}")
+
+            # Detect database requirements
+            db_driver = framework_info.get("database_driver")
+            if db_driver:
+                log.info(f"Database requirement detected: {db_driver}")
+                # Add database PHP extensions
+                db_extensions = db_mgr.get_required_php_extensions(db_driver)
+                for ext in db_extensions:
+                    if ext not in config["php_extensions"]:
+                        config["php_extensions"].append(ext)
+
+            # Store framework info for later use
+            config["_framework"] = framework_info
+            config["_db_driver"] = db_driver
+
+            log.divider()
+
+            # ── Install PHP (with auto-detected version) ────────
+            if not installer.install_php(config["php_version"], config["php_extensions"]):
+                log.error("Failed to install PHP")
+                return self._handle_failure(backup, log)
+
+            # ── Ensure Composer (latest, from getcomposer.org) ──
+            if os.path.isfile(os.path.join(config["deploy_path"], "composer.json")):
+                if not db_mgr.ensure_composer(config["php_version"]):
+                    log.warn("Composer installation had issues — continuing")
+
+            # ── Ensure Database ──────────────────────────────────
+            if db_driver:
+                if not db_mgr.ensure_database(db_driver, config):
+                    log.warn(f"Database setup for {db_driver} had issues — continuing")
 
             # ── Deploy environment file ─────────────────────────
             hooks.setup_environment_file(config)
@@ -250,13 +334,48 @@ class PHPDeployer:
                 log.error("Web server reload failed")
                 return self._handle_failure(backup, log)
 
-            # ── Post-deploy hooks ───────────────────────────────
+            # ── Smart Post-Deploy (framework-aware) ─────────
+            framework = config.get("_framework", {})
+            framework_name = framework.get("name", "generic")
+
+            # If user has custom post_deploy_commands, use those;
+            # otherwise, use auto-detected framework commands
+            user_commands = config.get("post_deploy_commands", [])
+            if not user_commands and framework.get("post_deploy_commands"):
+                log.info(
+                    f"Using auto-detected {framework_name} post-deploy commands"
+                )
+                config["post_deploy_commands"] = framework["post_deploy_commands"]
+
             hooks.run_composer_install(config)
             if not hooks.run_post_deploy(config):
                 log.warn("Post-deploy hooks had failures")
 
             # ── Setup cron jobs ─────────────────────────────────
             hooks.setup_cron_jobs(config)
+
+            # ── Fix framework-specific permissions ──────────────
+            writable_dirs = framework.get("writable_dirs", [])
+            if writable_dirs:
+                log.step(f"Setting framework writable directories ({framework_name})")
+                deploy_path = config["deploy_path"]
+                user = config.get("user", "root")
+                group = config.get("group", "www-data")
+                for wdir in writable_dirs:
+                    full_path = os.path.join(deploy_path, wdir)
+                    if os.path.isdir(full_path):
+                        import subprocess
+                        subprocess.run(
+                            f"chmod -R 775 '{full_path}'",
+                            shell=True, capture_output=True
+                        )
+                        subprocess.run(
+                            f"chown -R {user}:{group} '{full_path}'",
+                            shell=True, capture_output=True
+                        )
+                        log.info(f"  ✓ {wdir} → writable (775)")
+                    else:
+                        log.debug(f"  Writable dir not found: {wdir}")
 
             # ── Fix permissions again after hooks ───────────────
             perms.setup_permissions(config)

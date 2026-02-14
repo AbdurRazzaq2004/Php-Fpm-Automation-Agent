@@ -1,10 +1,10 @@
 # =============================================================================
-# PHP-FPM Automation Agent — Deployment Config for test PHP app
+# PHP-FPM Automation Agent — Deployment Config for Laravel app
 # =============================================================================
 
 service_name: my-php-app
 domain: 98.81.165.46
-repo_url: https://github.com/greg-md/php-app.git
+repo_url: https://github.com/laravel/laravel.git
 branch: master
 deploy_path: /var/www/my-php-app
 document_root_suffix: /public
@@ -23,7 +23,9 @@ php_extensions:
   - mysql
   - opcache
   - redis
-  - xsl
+  - bcmath
+  - tokenizer
+  - fileinfo
 
 enable_ssl: false
 
@@ -37,4 +39,9 @@ php_pool_min_spare: 1
 php_pool_max_spare: 4
 
 post_deploy_commands:
-  - "composer update --no-interaction --prefer-dist --optimize-autoloader --no-dev --ignore-platform-reqs"
+  - "cp .env.example .env"
+  - "composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev"
+  - "php artisan key:generate --force"
+  - "php artisan config:cache"
+  - "php artisan route:cache"
+  - "php artisan view:cache"

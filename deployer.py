@@ -591,7 +591,6 @@ class UniversalDeployer:
                 for wdir in writable_dirs:
                     full_path = os.path.join(deploy_path, wdir)
                     if os.path.isdir(full_path):
-                        import subprocess
                         subprocess.run(
                             f"chmod -R 775 '{full_path}'",
                             shell=True, capture_output=True

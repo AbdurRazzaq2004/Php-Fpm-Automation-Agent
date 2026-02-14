@@ -227,36 +227,52 @@ class AppAutoDetector:
                 v for v in self.SUPPORTED_VERSIONS
                 if self._version_tuple(v) > self._version_tuple(min_version)
             ]
+            # Check for upper bound: >8.0 <8.4
+            upper_match = re.search(r'<\s*(\d+)(?:\.(\d+))?', constraint)
+            if upper_match:
+                upper_major = int(upper_match.group(1))
+                upper_minor = int(upper_match.group(2)) if upper_match.group(2) else 0
+                upper = f"{upper_major}.{upper_minor}"
+                candidates = [
+                    v for v in candidates
+                    if self._version_tuple(v) < self._version_tuple(upper)
+                ]
             if candidates:
                 return candidates[-1]
             return None
 
         # If constraint has multiple parts separated by space/comma (AND constraints)
-        # e.g., ">=7.3 <8.0" or ">=7.3,<8.0"
+        # e.g., ">=7.3 <8.0" or ">=7.3,<8.0" or ">7.2 <8.0"
         parts = re.split(r'[,\s]+', constraint)
         if len(parts) > 1:
             min_v = None
+            min_strict = False  # True for >, False for >=
             max_v = None
             for part in parts:
                 part = part.strip()
                 if not part:
                     continue
                 ge_match = re.match(r'^>=\s*(\d+(?:\.\d+)?)', part)
-                lt_match = re.match(r'^<\s*(\d+(?:\.\d+)?)', part)
                 gt_match = re.match(r'^>\s*(\d+(?:\.\d+)?)', part)
+                lt_match = re.match(r'^<\s*(\d+(?:\.\d+)?)', part)
                 if ge_match:
                     v = ge_match.group(1)
                     min_v = v if '.' in v else f"{v}.0"
+                    min_strict = False
                 elif gt_match:
                     v = gt_match.group(1)
                     min_v = v if '.' in v else f"{v}.0"
+                    min_strict = True
                 elif lt_match:
                     v = lt_match.group(1)
                     max_v = v if '.' in v else f"{v}.0"
 
             candidates = self.SUPPORTED_VERSIONS[:]
             if min_v:
-                candidates = [v for v in candidates if self._version_tuple(v) >= self._version_tuple(min_v)]
+                if min_strict:
+                    candidates = [v for v in candidates if self._version_tuple(v) > self._version_tuple(min_v)]
+                else:
+                    candidates = [v for v in candidates if self._version_tuple(v) >= self._version_tuple(min_v)]
             if max_v:
                 candidates = [v for v in candidates if self._version_tuple(v) < self._version_tuple(max_v)]
             if candidates:
@@ -554,6 +570,11 @@ class AppAutoDetector:
         """
         Find .sql files in the repository root (not in vendor/).
         These are likely schema/migration files that need to be imported.
+
+        Returns files sorted by priority:
+        - schema/structure/create files first
+        - seed/data/insert files last
+        - alphabetical within same priority
         """
         import glob
         sql_files = []
@@ -566,6 +587,20 @@ class AppAutoDetector:
             if os.path.isdir(sql_dir):
                 for f in glob.glob(os.path.join(sql_dir, "*.sql")):
                     sql_files.append(f)
+
+        # Sort: schema/structure/create first, seed/data/insert last
+        def _sql_sort_key(filepath):
+            name = os.path.basename(filepath).lower()
+            # Priority 0: schema/structure/create files (run first)
+            if any(kw in name for kw in ("schema", "structure", "create", "init", "setup", "ddl")):
+                return (0, name)
+            # Priority 2: seed/data/insert files (run last)
+            if any(kw in name for kw in ("seed", "data", "insert", "sample", "fixture", "populate")):
+                return (2, name)
+            # Priority 1: everything else (middle)
+            return (1, name)
+
+        sql_files.sort(key=_sql_sort_key)
 
         if sql_files:
             names = [os.path.basename(f) for f in sql_files]

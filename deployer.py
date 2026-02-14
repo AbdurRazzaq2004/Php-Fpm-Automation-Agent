@@ -356,7 +356,11 @@ class PHPDeployer:
                             if rc.returncode == 0:
                                 log.success(f"  ✓ Imported {fname} → {target_db}")
                             else:
-                                log.warn(f"  SQL import had issues: {rc.stderr.decode()[:200] if rc.stderr else 'unknown'}")
+                                err_msg = rc.stderr.decode()[:200] if rc.stderr else "unknown"
+                                if "already exists" in err_msg.lower():
+                                    log.info(f"  ⊘ {fname}: tables already exist — skipped")
+                                else:
+                                    log.warn(f"  SQL import had issues: {err_msg}")
                         elif db_names:
                             # Import into first discovered database
                             rc = _sp.run(
@@ -365,6 +369,12 @@ class PHPDeployer:
                             )
                             if rc.returncode == 0:
                                 log.success(f"  ✓ Imported {fname} → {db_names[0]}")
+                            else:
+                                err_msg = rc.stderr.decode()[:200] if rc.stderr else "unknown"
+                                if "already exists" in err_msg.lower():
+                                    log.info(f"  ⊘ {fname}: tables already exist — skipped")
+                                else:
+                                    log.warn(f"  SQL import had issues: {err_msg}")
 
                 elif db_driver in ("pgsql", "postgres") and sql_files:
                     log.step("Auto-importing PostgreSQL schema files")

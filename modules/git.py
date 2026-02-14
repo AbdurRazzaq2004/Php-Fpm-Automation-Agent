@@ -229,7 +229,8 @@ class GitManager:
         self.log.info(f"Updating existing repository at {path}")
 
         # Mark directory as safe to avoid 'dubious ownership' errors
-        self._run(f"git config --global --add safe.directory {path}")
+        # Use --replace-all to prevent duplicates on repeated deploys
+        self._run(f"git config --global --replace-all safe.directory {path}")
 
         # Check current branch
         rc, current_branch, _ = self._run("git rev-parse --abbrev-ref HEAD", cwd=path)

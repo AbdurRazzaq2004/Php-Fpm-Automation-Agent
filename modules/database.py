@@ -260,6 +260,9 @@ class DatabaseManager:
                         self._run(f"systemctl enable {svc}")
                         break
 
+            # Ensure root can authenticate with password (may still be auth_socket)
+            self._configure_mysql_root_auth()
+
             return True
 
         # Not installed — install fresh
@@ -329,6 +332,9 @@ class DatabaseManager:
                 self._run("systemctl start postgresql")
                 self._run("systemctl enable postgresql")
 
+            # Ensure password auth is enabled (may still be peer-only)
+            self._configure_postgresql_auth()
+
             return True
 
         # Not installed — install fresh
@@ -350,8 +356,79 @@ class DatabaseManager:
 
         self._run("systemctl start postgresql")
         self._run("systemctl enable postgresql")
+
+        # Configure password auth for PHP apps
+        self._configure_postgresql_auth()
+
         self.log.success("PostgreSQL installed and started")
         return True
+
+    def _configure_postgresql_auth(self):
+        """
+        Configure PostgreSQL pg_hba.conf for md5/scram password auth.
+
+        By default, PostgreSQL on Ubuntu uses peer auth for local connections,
+        which prevents PHP apps from connecting with username/password.
+        We change local connections from 'peer' to 'md5' so apps can
+        authenticate via password.
+        """
+        # Find pg_hba.conf
+        rc, hba_path, _ = self._run(
+            "sudo -u postgres psql -t -c 'SHOW hba_file;' 2>/dev/null"
+        )
+        hba_path = hba_path.strip() if rc == 0 else ""
+
+        if not hba_path or not os.path.isfile(hba_path):
+            # Fallback: search common locations
+            for candidate in [
+                "/etc/postgresql/*/main/pg_hba.conf",
+                "/var/lib/pgsql/data/pg_hba.conf",
+            ]:
+                import glob
+                matches = glob.glob(candidate)
+                if matches:
+                    hba_path = matches[-1]  # Use latest version
+                    break
+
+        if not hba_path or not os.path.isfile(hba_path):
+            self.log.warn("Could not find pg_hba.conf — apps may need manual DB auth config")
+            return
+
+        try:
+            with open(hba_path, "r") as f:
+                content = f.read()
+
+            # Check if already configured for md5/scram
+            import re as _re
+            # Look for lines like: local all all peer
+            if not _re.search(r'^\s*local\s+all\s+all\s+peer', content, _re.MULTILINE):
+                self.log.info("pg_hba.conf already allows password auth for local connections")
+                return
+
+            # Replace peer with md5 for local connections (not for postgres system user)
+            new_content = _re.sub(
+                r'^(local\s+all\s+all\s+)peer',
+                r'\1md5',
+                content,
+                flags=_re.MULTILINE
+            )
+
+            if new_content != content:
+                # Backup original
+                import shutil
+                shutil.copy2(hba_path, hba_path + ".bak")
+
+                with open(hba_path, "w") as f:
+                    f.write(new_content)
+
+                # Reload PostgreSQL to apply changes
+                self._run("systemctl reload postgresql")
+                self.log.info("Configured PostgreSQL pg_hba.conf for password auth (peer → md5)")
+            else:
+                self.log.info("pg_hba.conf already configured for password auth")
+
+        except Exception as e:
+            self.log.warn(f"Could not configure pg_hba.conf: {e}")
 
     # ── PHP Extension Mapping ───────────────────────────────────
 

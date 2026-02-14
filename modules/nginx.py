@@ -83,32 +83,41 @@ server {{
         font/opentype
         image/svg+xml;
 
+    # ── Security: Deny Hidden Files (BEFORE PHP location) ──
+    location ~ /\\. {{
+        deny all;
+        access_log off;
+        log_not_found off;
+    }}
+
+    # ── Deny access to PHP files in uploads ─────────────────
+    location ~* /(?:uploads|files)/.*\\.php$ {{
+        deny all;
+    }}
+
     # ── Main Location ───────────────────────────────────────
     location / {{
         try_files $uri $uri/ /index.php?$query_string;
     }}
 
-    # ── PHP Processing ──────────────────────────────────────
-    location ~ \\.php$ {{
+    # ── PHP Processing (supports PATH_INFO for MVC routers) ─
+    location ~ \\.php(/|$) {{
         # Mitigate https://httpoxy.org/ vulnerabilities
         fastcgi_param HTTP_PROXY "";
 
-        # Ensure file exists before passing to PHP-FPM
-        try_files $uri =404;
+        # Split script name and path info
+        fastcgi_split_path_info ^(.+?\\.php)(/.*)$;
+
+        # Ensure the PHP script exists before passing to FPM
+        try_files $fastcgi_script_name =404;
 
         fastcgi_pass unix:{fpm_socket};
         fastcgi_index index.php;
 
-        # Extract original URI path for PATH_INFO (strip query string)
-        set $path_info $request_uri;
-        if ($path_info ~ "^([^?]*)") {{
-            set $path_info $1;
-        }}
-
         # FastCGI parameters
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_param PATH_INFO $path_info;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
         fastcgi_param DOCUMENT_ROOT $document_root;
 
         # FastCGI tuning
@@ -133,23 +142,11 @@ server {{
         try_files $uri =404;
     }}
 
-    # ── Security: Deny Hidden Files ─────────────────────────
-    location ~ /\\. {{
-        deny all;
-        access_log off;
-        log_not_found off;
-    }}
-
     # ── Security: Deny Sensitive Files ──────────────────────
     location ~* (?:composer\\.json|composer\\.lock|package\\.json|package-lock\\.json|\\.env|\\.git|readme|changelog|license)$ {{
         deny all;
         access_log off;
         log_not_found off;
-    }}
-
-    # ── Deny access to PHP files in uploads ─────────────────
-    location ~* /(?:uploads|files)/.*\\.php$ {{
-        deny all;
     }}
 
     # ── Robots.txt ──────────────────────────────────────────
@@ -231,25 +228,26 @@ server {{
     gzip_min_length 256;
     gzip_types text/plain text/css text/javascript text/xml application/json application/javascript application/xml application/xml+rss application/vnd.ms-fontobject font/opentype image/svg+xml;
 
+    # Security: Deny Hidden Files (BEFORE PHP location)
+    location ~ /\\. {{ deny all; access_log off; log_not_found off; }}
+
+    # Deny access to PHP files in uploads
+    location ~* /(?:uploads|files)/.*\\.php$ {{ deny all; }}
+
     location / {{
         try_files $uri $uri/ /index.php?$query_string;
     }}
 
-    location ~ \\.php$ {{
+    location ~ \\.php(/|$) {{
         fastcgi_param HTTP_PROXY "";
-        try_files $uri =404;
+        fastcgi_split_path_info ^(.+?\\.php)(/.*)$;
+        try_files $fastcgi_script_name =404;
         fastcgi_pass unix:{fpm_socket};
         fastcgi_index index.php;
 
-        # Extract original URI path for PATH_INFO (strip query string)
-        set $path_info $request_uri;
-        if ($path_info ~ "^([^?]*)") {{
-            set $path_info $1;
-        }}
-
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_param PATH_INFO $path_info;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
         fastcgi_param DOCUMENT_ROOT $document_root;
         fastcgi_connect_timeout 60s;
         fastcgi_send_timeout 300s;
@@ -267,9 +265,7 @@ server {{
         try_files $uri =404;
     }}
 
-    location ~ /\\. {{ deny all; access_log off; log_not_found off; }}
     location ~* (?:composer\\.json|composer\\.lock|package\\.json|\\.env|\\.git|readme|changelog|license)$ {{ deny all; }}
-    location ~* /(?:uploads|files)/.*\\.php$ {{ deny all; }}
 
 {extra_config}
 }}

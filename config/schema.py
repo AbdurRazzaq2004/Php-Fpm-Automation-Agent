@@ -72,8 +72,8 @@ FIELD_VALIDATORS = {
     },
     "domain": {
         "type": str,
-        "pattern": r"^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$",
-        "description": "Valid domain name (e.g., example.com)",
+        "pattern": r"^([a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+|(\d{1,3}\.){3}\d{1,3})$",
+        "description": "Valid domain name (e.g., example.com) or IPv4 address",
     },
     "repo_url": {
         "type": str,

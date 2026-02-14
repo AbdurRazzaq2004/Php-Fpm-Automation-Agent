@@ -6,6 +6,7 @@ security headers, gzip, and PHP-FPM integration.
 """
 
 import os
+import re
 import subprocess
 from typing import Dict, Optional, Tuple
 
@@ -39,7 +40,7 @@ class NginxConfigurator:
 server {{
     listen 80;
     listen [::]:80;
-    server_name {domain} www.{domain};
+    server_name {server_name};
 
     root {document_root};
     index index.php index.html index.htm;
@@ -167,7 +168,7 @@ server {{
 server {{
     listen 80;
     listen [::]:80;
-    server_name {domain} www.{domain};
+    server_name {server_name};
     return 301 https://$server_name$request_uri;
 }}
 """
@@ -183,7 +184,7 @@ server {{
 server {{
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name {domain} www.{domain};
+    server_name {server_name};
 
     # SSL Certificate
     ssl_certificate {ssl_cert_path};
@@ -318,9 +319,12 @@ server {{
                 return False
 
         # Build template variables
+        is_ip = bool(re.match(r'^(\d{1,3}\.){3}\d{1,3}$', domain))
+        server_name = domain if is_ip else f"{domain} www.{domain}"
         tmpl_vars = {
             "service_name": service_name,
             "domain": domain,
+            "server_name": server_name,
             "php_version": config["php_version"],
             "fpm_socket": config["fpm_socket"],
             "document_root": config["document_root"],

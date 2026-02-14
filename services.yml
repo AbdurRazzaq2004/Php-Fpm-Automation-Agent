@@ -23,10 +23,10 @@
 #   language: auto       → Auto-detect from repository files (default)
 # =============================================================================
 
-service_name: todo-python
+service_name: todo-mern
 domain: 98.81.165.46
-language: python
-repo_url: https://github.com/AbdurRazzaq2004/sample-todoApp-in-pyhton-for-AutomationTest.git
+language: node
+repo_url: https://github.com/AbdurRazzaq2004/todo-SampleApp-MERN-Stack-For-AutomationTest.git
 branch: main
-deploy_path: /var/www/todo-python
+deploy_path: /var/www/todo-mern
 web_server: apache

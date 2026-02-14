@@ -204,7 +204,9 @@ class NodeRuntime(BaseRuntime):
                     pass
 
         if not build_cmd:
-            return True  # No build needed
+            # No root build needed, but still check for client subdirectory
+            self._build_client_app(deploy_path)
+            return True
 
         self.log.step(f"Building application: {build_cmd}")
         rc, out, err = self._run(build_cmd, cwd=deploy_path, user=user, timeout=600)
@@ -212,6 +214,53 @@ class NodeRuntime(BaseRuntime):
             self.log.warn(f"Build had issues: {err[:300]}")
         else:
             self.log.success("Build completed")
+
+        # ── Handle client/frontend subdirectory (MERN/fullstack pattern) ──
+        self._build_client_app(deploy_path)
+
+        return True
+
+    def _build_client_app(self, deploy_path: str) -> bool:
+        """Build client/frontend app if present (MERN, MEAN, fullstack)."""
+        client_dir = self._detect_client_dir(deploy_path)
+        if not client_dir:
+            return True
+
+        client_path = os.path.join(deploy_path, client_dir)
+        pm = self._detect_package_manager(client_path)
+
+        self.log.step(f"Building client ({client_dir}/)")
+
+        # Install client dependencies
+        self.log.info(f"Installing {client_dir} dependencies ({pm})...")
+        install_cmds = {
+            "npm": "npm install",
+            "yarn": "yarn install",
+            "pnpm": "pnpm install",
+            "bun": "bun install",
+        }
+        rc, _, err = self._run(
+            install_cmds.get(pm, "npm install"),
+            cwd=client_path, timeout=600,
+        )
+        if rc != 0:
+            self.log.warn(f"Client dependency install had issues: {err[:200]}")
+
+        # Build client
+        build_cmd = f"{pm} run build"
+        self.log.info(f"Running: {build_cmd} in {client_dir}/")
+        rc, _, err = self._run(build_cmd, cwd=client_path, timeout=600)
+        if rc != 0:
+            self.log.warn(f"Client build had issues: {err[:300]}")
+            return False
+
+        # Verify build output exists
+        for out_dir in ["build", "dist", "out", ".next"]:
+            if os.path.isdir(os.path.join(client_path, out_dir)):
+                self.log.success(f"Client build completed ({client_dir}/{out_dir}/)")
+                return True
+
+        self.log.success(f"Client build completed ({client_dir}/)")
         return True
 
     def get_start_command(self, config: Dict) -> Optional[str]:
@@ -325,4 +374,177 @@ class NodeRuntime(BaseRuntime):
             base["entry_point"] = "build/server.js"
             base["post_deploy_commands"] = ["node ace migration:run --force"]
 
+        # ── Auto-detect database from package.json ──────────────
+        db_driver = self._detect_node_db(deploy_path)
+        if db_driver:
+            base["database_driver"] = db_driver
+
+        # ── Extract DB credentials from .env.example ────────────
+        env_creds = self._extract_env_credentials(deploy_path)
+        if env_creds:
+            base["database_credentials"] = env_creds
+
+        # ── Auto-detect app port ────────────────────────────────
+        detected_port = self._detect_app_port(deploy_path)
+        if detected_port:
+            base["app_port"] = detected_port
+
+        # ── Detect client/frontend directory (fullstack apps) ───
+        client_dir = self._detect_client_dir(deploy_path)
+        if client_dir:
+            base["client_dir"] = client_dir
+
         return base
+
+    def _detect_node_db(self, deploy_path: str) -> Optional[str]:
+        """Detect database type from package.json dependencies."""
+        deps = self._read_package_json_deps(deploy_path)
+
+        # Direct DB driver packages
+        driver_map = {
+            "mysql2": "mysql",
+            "mysql": "mysql",
+            "pg": "pgsql",
+            "pg-promise": "pgsql",
+            "mongoose": "mongodb",
+            "mongodb": "mongodb",
+            "better-sqlite3": "sqlite",
+            "sqlite3": "sqlite",
+            "tedious": "mssql",
+            "mssql": "mssql",
+        }
+
+        for pkg, driver in driver_map.items():
+            if pkg in deps:
+                self.log.info(f"Detected {driver} requirement from dependency: {pkg}")
+                return driver
+
+        # ORMs — need to detect DB type from config/env
+        orm_packages = ["sequelize", "typeorm", "knex", "prisma", "@prisma/client", "objection"]
+        has_orm = any(pkg in deps for pkg in orm_packages)
+        if has_orm:
+            env_driver = self._detect_db_from_env(deploy_path)
+            if env_driver:
+                return env_driver
+
+        return None
+
+    def _detect_db_from_env(self, deploy_path: str) -> Optional[str]:
+        """Detect DB type from .env.example content."""
+        for fname in [".env.example", ".env.sample", ".env.template"]:
+            fpath = os.path.join(deploy_path, fname)
+            if os.path.isfile(fpath):
+                try:
+                    with open(fpath) as f:
+                        content = f.read().lower()
+                    if "mysql" in content or "db_port=3306" in content:
+                        self.log.info(f"Detected mysql from {fname}")
+                        return "mysql"
+                    if "postgres" in content or "db_port=5432" in content:
+                        self.log.info(f"Detected pgsql from {fname}")
+                        return "pgsql"
+                    if "mongodb" in content or "mongo_uri" in content:
+                        return "mongodb"
+                except Exception:
+                    pass
+        return None
+
+    def _extract_env_credentials(self, deploy_path: str) -> Dict:
+        """Extract DB credentials from .env.example or similar template."""
+        for fname in [".env.example", ".env.sample", ".env.template"]:
+            fpath = os.path.join(deploy_path, fname)
+            if os.path.isfile(fpath):
+                try:
+                    creds = {}
+                    with open(fpath) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            if "=" not in line:
+                                continue
+                            key, _, val = line.partition("=")
+                            key = key.strip().upper()
+                            val = val.strip()
+
+                            if key in ("DB_NAME", "DB_DATABASE", "MYSQL_DATABASE", "POSTGRES_DB"):
+                                creds["dbname"] = val
+                            elif key in ("DB_USER", "DB_USERNAME", "MYSQL_USER", "POSTGRES_USER"):
+                                creds["user"] = val
+                            elif key in ("DB_PASSWORD", "DB_PASS", "MYSQL_PASSWORD", "POSTGRES_PASSWORD"):
+                                creds["password"] = val
+                            elif key in ("DB_HOST", "MYSQL_HOST", "POSTGRES_HOST"):
+                                creds["host"] = val
+                            elif key in ("DB_PORT", "MYSQL_PORT", "POSTGRES_PORT"):
+                                creds["port"] = val
+
+                    if creds:
+                        self.log.info(
+                            f"Extracted DB credentials from {fname}: "
+                            f"db={creds.get('dbname')}, user={creds.get('user')}"
+                        )
+                        return creds
+                except Exception:
+                    pass
+        return {}
+
+    def _detect_app_port(self, deploy_path: str) -> Optional[int]:
+        """Detect app port from .env.example and source code."""
+        port_vars = ["PORT", "APP_PORT", "SERVER_PORT", "HTTP_PORT"]
+
+        # Check .env.example first
+        for fname in [".env.example", ".env.sample", ".env.template"]:
+            fpath = os.path.join(deploy_path, fname)
+            if os.path.isfile(fpath):
+                try:
+                    with open(fpath) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            if "=" in line:
+                                key, _, val = line.partition("=")
+                                if key.strip() in port_vars:
+                                    try:
+                                        port = int(val.strip())
+                                        if 1024 <= port <= 65535:
+                                            self.log.info(f"Detected app port {port} from {fname}")
+                                            return port
+                                    except ValueError:
+                                        pass
+                except Exception:
+                    pass
+
+        # Fall back to scanning source files
+        for entry in ["server/index.js", "server.js", "index.js", "app.js", "src/index.js"]:
+            fpath = os.path.join(deploy_path, entry)
+            if os.path.isfile(fpath):
+                try:
+                    with open(fpath) as f:
+                        content = f.read()
+                    match = re.search(r"(?:PORT|port)\s*(?:=|:|\|\|)\s*(\d{4,5})", content)
+                    if match:
+                        port = int(match.group(1))
+                        if 1024 <= port <= 65535:
+                            self.log.info(f"Detected app port {port} from {entry}")
+                            return port
+                except Exception:
+                    pass
+
+        return None
+
+    def _detect_client_dir(self, deploy_path: str) -> Optional[str]:
+        """Detect client/frontend subdirectory for fullstack apps (MERN, MEAN, etc.)."""
+        for candidate in ["client", "frontend", "web"]:
+            client_path = os.path.join(deploy_path, candidate)
+            client_pkg = os.path.join(client_path, "package.json")
+            if os.path.isdir(client_path) and os.path.isfile(client_pkg):
+                try:
+                    with open(client_pkg) as f:
+                        pkg = json.load(f)
+                    if "build" in pkg.get("scripts", {}):
+                        self.log.info(f"Detected client directory: {candidate}/")
+                        return candidate
+                except Exception:
+                    pass
+        return None

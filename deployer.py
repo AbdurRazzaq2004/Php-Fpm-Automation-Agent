@@ -439,6 +439,14 @@ class UniversalDeployer:
                 if not runtime.build(config):
                     log.warn("Build step had issues — continuing")
 
+                # ── Detect fullstack client build (MERN/MEAN/etc.) ──
+                for build_dir in ["client/build", "client/dist", "frontend/build", "frontend/dist"]:
+                    build_path = os.path.join(config["deploy_path"], build_dir)
+                    if os.path.isdir(build_path):
+                        config["_client_build_path"] = build_path
+                        log.info(f"Fullstack app detected: serving static files from {build_dir}")
+                        break
+
             # ════════════════════════════════════════════════════
             #   DATABASE PROVISIONING (all languages)
             # ════════════════════════════════════════════════════
@@ -724,6 +732,15 @@ class UniversalDeployer:
             "DATABASE_URL": f"{db_engine}://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}",
             "APP_DEBUG": "False",
         }
+
+        # Production environment variables
+        domain = config.get("domain", "localhost")
+        language = config.get("language", "")
+        if language in ("node", "nextjs"):
+            replacements["NODE_ENV"] = "production"
+        replacements["CLIENT_URL"] = f"http://{domain}"
+        replacements["FRONTEND_URL"] = f"http://{domain}"
+        replacements["APP_URL"] = f"http://{domain}"
 
         lines = content.splitlines()
         new_lines = []

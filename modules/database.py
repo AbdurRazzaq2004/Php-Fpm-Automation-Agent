@@ -506,3 +506,161 @@ class DatabaseManager:
 
         self.log.error("Composer installation verification failed")
         return False
+
+    # ── Database Provisioning ───────────────────────────────────
+
+    def provision_database(self, driver: str, creds: Dict) -> bool:
+        """
+        Create the database, user, and grant privileges based on extracted credentials.
+
+        This is called AFTER ensure_database() installs the DB engine, and BEFORE
+        SQL files are imported. It ensures the target database and user exist.
+
+        Args:
+            driver: 'mysql', 'pgsql', 'postgres', etc.
+            creds: dict with keys: host, port, dbname, user, password
+        """
+        dbname = creds.get("dbname")
+        user = creds.get("user")
+        password = creds.get("password")
+
+        if not dbname:
+            self.log.warn("No database name detected from source code — skipping provisioning")
+            return False
+
+        self.log.step(f"Provisioning database: {dbname}")
+
+        if driver in ("mysql", "mariadb"):
+            return self._provision_mysql(dbname, user, password)
+        elif driver in ("pgsql", "postgres", "postgresql"):
+            return self._provision_postgresql(dbname, user, password)
+        else:
+            self.log.warn(f"Unknown driver {driver} — cannot provision database")
+            return False
+
+    def _provision_postgresql(self, dbname: str, user: Optional[str] = None,
+                              password: Optional[str] = None) -> bool:
+        """
+        Create PostgreSQL database and user with proper permissions.
+
+        Steps:
+        1. Set password for the target user (create user if not 'postgres')
+        2. Create database owned by the user
+        3. Grant all privileges
+        """
+        user = user or "postgres"
+        self.log.info(f"PostgreSQL: ensuring database '{dbname}' with user '{user}'")
+
+        # Step 1: Handle user setup
+        if user == "postgres":
+            # Set the postgres superuser password
+            if password:
+                rc, _, err = self._run(
+                    f"sudo -u postgres psql -c \"ALTER USER postgres WITH PASSWORD '{password}';\""
+                )
+                if rc == 0:
+                    self.log.info("Set password for postgres superuser")
+                else:
+                    self.log.warn(f"Could not set postgres password: {err}")
+        else:
+            # Create application-specific user if not exists
+            rc, out, _ = self._run(
+                f"sudo -u postgres psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='{user}';\""
+            )
+            if out.strip() == "1":
+                self.log.info(f"PostgreSQL user '{user}' already exists")
+                # Update password if specified
+                if password:
+                    self._run(
+                        f"sudo -u postgres psql -c \"ALTER USER {user} WITH PASSWORD '{password}';\""
+                    )
+            else:
+                pwd_clause = f"PASSWORD '{password}'" if password else ""
+                rc, _, err = self._run(
+                    f"sudo -u postgres psql -c \"CREATE USER {user} WITH {pwd_clause} CREATEDB;\""
+                )
+                if rc == 0:
+                    self.log.info(f"Created PostgreSQL user: {user}")
+                else:
+                    self.log.warn(f"Could not create PostgreSQL user: {err}")
+
+        # Step 2: Create database if not exists
+        rc, out, _ = self._run(
+            f"sudo -u postgres psql -tAc \"SELECT 1 FROM pg_database WHERE datname='{dbname}';\""
+        )
+        if out.strip() == "1":
+            self.log.info(f"PostgreSQL database '{dbname}' already exists")
+        else:
+            owner_clause = f"OWNER {user}" if user else ""
+            rc, _, err = self._run(
+                f"sudo -u postgres psql -c \"CREATE DATABASE {dbname} {owner_clause};\""
+            )
+            if rc == 0:
+                self.log.success(f"Created PostgreSQL database: {dbname}")
+            else:
+                self.log.error(f"Failed to create database '{dbname}': {err}")
+                return False
+
+        # Step 3: Grant privileges (if non-postgres user)
+        if user and user != "postgres":
+            self._run(
+                f"sudo -u postgres psql -c \"GRANT ALL PRIVILEGES ON DATABASE {dbname} TO {user};\""
+            )
+            # Also grant schema permissions (PostgreSQL 15+ requires this)
+            self._run(
+                f"sudo -u postgres psql -d {dbname} -c \"GRANT ALL ON SCHEMA public TO {user};\""
+            )
+            self.log.info(f"Granted all privileges on '{dbname}' to '{user}'")
+
+        self.log.success(f"PostgreSQL database '{dbname}' ready for user '{user}'")
+        return True
+
+    def _provision_mysql(self, dbname: str, user: Optional[str] = None,
+                         password: Optional[str] = None) -> bool:
+        """
+        Create MySQL database and user with proper permissions.
+
+        Steps:
+        1. Create database (IF NOT EXISTS)
+        2. Create user with password (if not root)
+        3. Grant all privileges
+        """
+        user = user or "root"
+        self.log.info(f"MySQL: ensuring database '{dbname}' with user '{user}'")
+
+        # Step 1: Create database
+        rc, _, err = self._run(
+            f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{dbname}`;'"
+        )
+        if rc == 0:
+            self.log.info(f"MySQL database '{dbname}' ready")
+        else:
+            self.log.error(f"Failed to create MySQL database '{dbname}': {err}")
+            return False
+
+        # Step 2/3: Create non-root user and grant privileges
+        if user and user != "root":
+            pwd_clause = f"IDENTIFIED BY '{password}'" if password else ""
+            # CREATE USER IF NOT EXISTS (MySQL 5.7+)
+            rc, _, _ = self._run(
+                f"mysql -u root -e \"CREATE USER IF NOT EXISTS '{user}'@'localhost' {pwd_clause};\""
+            )
+            if rc == 0:
+                self.log.info(f"MySQL user '{user}' ready")
+            else:
+                self.log.warn(f"Could not create MySQL user '{user}'")
+
+            # Grant privileges
+            self._run(
+                f"mysql -u root -e \"GRANT ALL PRIVILEGES ON \\`{dbname}\\`.* TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
+            )
+            self.log.info(f"Granted all privileges on '{dbname}' to '{user}'")
+        elif user == "root" and password:
+            # Set root password if specified by the app
+            self._run(
+                f"mysql -u root -e \"ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{password}'; FLUSH PRIVILEGES;\""
+            )
+            self.log.info("Set MySQL root password from app config")
+
+        self.log.success(f"MySQL database '{dbname}' ready for user '{user}'")
+        return True

@@ -361,31 +361,38 @@ class AppAutoDetector:
         - writable_dirs: directories needing write permissions
         - post_deploy_commands: recommended post-deploy hooks
         - database_driver: likely database driver
+        - database_credentials: extracted DB credentials (host, port, dbname, user, password)
         """
         composer_data = self._read_composer_json(deploy_path)
 
         # Check for Laravel
         if self._is_laravel(deploy_path, composer_data):
-            return self._laravel_info(deploy_path, composer_data)
-
+            info = self._laravel_info(deploy_path, composer_data)
         # Check for Symfony
-        if self._is_symfony(deploy_path, composer_data):
-            return self._symfony_info(deploy_path, composer_data)
-
+        elif self._is_symfony(deploy_path, composer_data):
+            info = self._symfony_info(deploy_path, composer_data)
         # Check for WordPress
-        if self._is_wordpress(deploy_path):
-            return self._wordpress_info(deploy_path)
-
+        elif self._is_wordpress(deploy_path):
+            info = self._wordpress_info(deploy_path)
         # Check for CodeIgniter
-        if self._is_codeigniter(deploy_path, composer_data):
-            return self._codeigniter_info(deploy_path)
-
+        elif self._is_codeigniter(deploy_path, composer_data):
+            info = self._codeigniter_info(deploy_path)
         # Check for Slim
-        if self._is_slim(composer_data):
-            return self._slim_info(deploy_path)
+        elif self._is_slim(composer_data):
+            info = self._slim_info(deploy_path)
+        else:
+            # Generic PHP app (already includes database_credentials)
+            info = self._generic_info(deploy_path)
 
-        # Generic PHP app
-        return self._generic_info(deploy_path)
+        # Ensure database_credentials is always present for all frameworks
+        if "database_credentials" not in info:
+            db_driver = info.get("database_driver")
+            if db_driver:
+                info["database_credentials"] = self._extract_db_credentials(deploy_path, db_driver)
+            else:
+                info["database_credentials"] = {}
+
+        return info
 
     def _is_laravel(self, path: str, composer_data: Optional[Dict]) -> bool:
         """Detect Laravel framework."""
@@ -554,6 +561,11 @@ class AppAutoDetector:
             # Parse SQL files to find CREATE DATABASE statements
             db_names = self._extract_db_names_from_sql(sql_files)
 
+        # Extract database credentials from source code
+        db_credentials = {}
+        if db_driver:
+            db_credentials = self._extract_db_credentials(path, db_driver)
+
         return {
             "name": "generic",
             "version": "unknown",
@@ -564,6 +576,7 @@ class AppAutoDetector:
             "extra_extensions": extra_extensions,
             "sql_files": sql_files,
             "database_names": db_names,
+            "database_credentials": db_credentials,
         }
 
     def _discover_sql_files(self, path: str) -> List[str]:
@@ -656,6 +669,152 @@ class AppAutoDetector:
             except Exception:
                 continue
         return results
+
+    def _extract_db_credentials(self, path: str, db_driver: str) -> Dict:
+        """
+        Extract database credentials from the app's source code.
+
+        Scans .env, .env.example, config/database.php, and PHP source files
+        for database connection parameters: host, port, dbname, user, password.
+
+        Returns dict with keys: host, port, dbname, user, password (all strings or None).
+        """
+        import glob as _glob
+
+        creds = {
+            "host": None,
+            "port": None,
+            "dbname": None,
+            "user": None,
+            "password": None,
+        }
+
+        # ── 1. Check .env / .env.example files ──────────────────
+        env_key_map = {
+            # key pattern → creds field
+            "DB_HOST": "host",
+            "DB_PORT": "port",
+            "DB_NAME": "dbname",
+            "DB_DATABASE": "dbname",
+            "DB_USER": "user",
+            "DB_USERNAME": "user",
+            "DB_PASS": "password",
+            "DB_PASSWORD": "password",
+            "PGHOST": "host",
+            "PGPORT": "port",
+            "PGDATABASE": "dbname",
+            "PGUSER": "user",
+            "PGPASSWORD": "password",
+        }
+
+        for env_name in [".env", ".env.example", ".env.production", ".env.local"]:
+            env_path = os.path.join(path, env_name)
+            if not os.path.isfile(env_path):
+                continue
+            try:
+                with open(env_path, "r", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" not in line:
+                            continue
+                        key, _, value = line.partition("=")
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        if key in env_key_map and value:
+                            field = env_key_map[key]
+                            if creds[field] is None:  # first wins
+                                creds[field] = value
+            except Exception:
+                continue
+
+        # ── 2. Check config/database.php (PHP arrays) ───────────
+        config_dir = os.path.join(path, "config")
+        php_config_files = []
+        if os.path.isdir(config_dir):
+            php_config_files.extend(_glob.glob(os.path.join(config_dir, "*.php")))
+
+        for fpath in php_config_files:
+            try:
+                with open(fpath, "r", errors="ignore") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            # Extract from PHP array patterns:
+            #   'host' => 'localhost'  or  'host' => getenv('DB_HOST') ?: 'localhost'
+            php_key_map = {
+                "host": "host",
+                "db_host": "host",
+                "hostname": "host",
+                "server": "host",
+                "port": "port",
+                "db_port": "port",
+                "dbname": "dbname",
+                "db_name": "dbname",
+                "database": "dbname",
+                "db": "dbname",
+                "user": "user",
+                "username": "user",
+                "db_user": "user",
+                "password": "password",
+                "passwd": "password",
+                "pass": "password",
+                "db_pass": "password",
+                "db_password": "password",
+            }
+
+            for php_key, cred_field in php_key_map.items():
+                if creds[cred_field] is not None:
+                    continue  # Already found from .env
+
+                # Match: 'key' => getenv('X') ?: 'default_value'
+                pattern = (
+                    r"""['"]""" + re.escape(php_key) + r"""['"]"""
+                    r"""\s*=>\s*"""
+                    r"""(?:getenv\s*\([^)]*\)\s*\?:\s*)?"""
+                    r"""['"]([^'"]+)['"]"""
+                )
+                m = re.search(pattern, content, re.IGNORECASE)
+                if m:
+                    creds[cred_field] = m.group(1)
+
+            # Match PDO DSN: pgsql:host=xxx;port=5432;dbname=yyy
+            dsn_match = re.search(
+                r"""(?:pgsql|mysql):host=([^;'"]+)(?:;port=(\d+))?(?:;dbname=([^;'"]+))?""",
+                content, re.IGNORECASE,
+            )
+            if dsn_match:
+                if creds["host"] is None and dsn_match.group(1):
+                    creds["host"] = dsn_match.group(1)
+                if creds["port"] is None and dsn_match.group(2):
+                    creds["port"] = dsn_match.group(2)
+                if creds["dbname"] is None and dsn_match.group(3):
+                    creds["dbname"] = dsn_match.group(3)
+
+        # ── 3. Apply sensible defaults ──────────────────────────
+        if creds["host"] is None:
+            creds["host"] = "localhost"
+        if db_driver in ("pgsql", "postgres", "postgresql"):
+            if creds["port"] is None:
+                creds["port"] = "5432"
+            if creds["user"] is None:
+                creds["user"] = "postgres"
+        elif db_driver in ("mysql", "mariadb"):
+            if creds["port"] is None:
+                creds["port"] = "3306"
+            if creds["user"] is None:
+                creds["user"] = "root"
+
+        # Log what we found
+        found = {k: v for k, v in creds.items() if v is not None and k != "password"}
+        if found:
+            self.log.info(f"Extracted DB credentials: {found}")
+        if creds.get("password"):
+            self.log.info("Extracted DB password: ****")
+
+        return creds
 
     def _detect_generic_db_driver(self, path: str) -> Optional[str]:
         """

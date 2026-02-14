@@ -319,9 +319,14 @@ class PHPDeployer:
                     log.warn("Composer installation had issues — continuing")
 
             # ── Ensure Database ──────────────────────────────────
+            db_credentials = framework_info.get("database_credentials", {})
             if db_driver:
                 if not db_mgr.ensure_database(db_driver, config):
                     log.warn(f"Database setup for {db_driver} had issues — continuing")
+
+                # Provision database and user from extracted credentials
+                if db_credentials and db_credentials.get("dbname"):
+                    db_mgr.provision_database(db_driver, db_credentials)
 
                 # Auto-import SQL schema files if found
                 sql_files = framework_info.get("sql_files", [])
@@ -329,67 +334,64 @@ class PHPDeployer:
 
                 import subprocess as _sp
 
+                # Determine target database name for SQL imports
+                target_db = (
+                    db_credentials.get("dbname")
+                    or self._detect_pgsql_dbname(config["deploy_path"])
+                    or (db_names[0] if db_names else None)
+                )
+
                 if db_driver == "mysql" and (sql_files or db_names):
                     log.step("Auto-importing MySQL schema files")
 
-                    # Create databases first (safe: IF NOT EXISTS)
+                    # Create databases from SQL files (safe: IF NOT EXISTS)
                     for db_name in db_names:
-                        log.info(f"Creating database: {db_name}")
-                        _sp.run(
-                            f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{db_name}`;'",
-                            shell=True, capture_output=True
-                        )
+                        if db_name != target_db:  # Don't duplicate if already provisioned
+                            log.info(f"Creating database: {db_name}")
+                            _sp.run(
+                                f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{db_name}`;'",
+                                shell=True, capture_output=True
+                            )
 
                     # Import SQL files
+                    import_db = target_db or (db_names[0] if db_names else None)
                     for sql_file in sql_files:
                         fname = os.path.basename(sql_file)
                         log.info(f"Importing SQL: {fname}")
                         # Parse which DB this file targets
                         sql_info = autodetect._extract_table_sql([sql_file])
+                        file_target_db = None
                         if sql_info and sql_info[0].get("database"):
-                            target_db = sql_info[0]["database"]
-                            # Filter out CREATE DATABASE lines and import the rest
+                            file_target_db = sql_info[0]["database"]
+
+                        use_db = file_target_db or import_db
+                        if use_db:
                             rc = _sp.run(
-                                f"grep -iv 'create database' '{sql_file}' | mysql -u root {target_db}",
+                                f"grep -iv 'create database' '{sql_file}' | mysql -u root {use_db}",
                                 shell=True, capture_output=True
                             )
                             if rc.returncode == 0:
-                                log.success(f"  ✓ Imported {fname} → {target_db}")
+                                log.success(f"  ✓ Imported {fname} → {use_db}")
                             else:
                                 err_msg = rc.stderr.decode()[:200] if rc.stderr else "unknown"
                                 if "already exists" in err_msg.lower():
                                     log.info(f"  ⊘ {fname}: tables already exist — skipped")
                                 else:
                                     log.warn(f"  SQL import had issues: {err_msg}")
-                        elif db_names:
-                            # Import into first discovered database
-                            rc = _sp.run(
-                                f"grep -iv 'create database' '{sql_file}' | mysql -u root {db_names[0]}",
-                                shell=True, capture_output=True
-                            )
-                            if rc.returncode == 0:
-                                log.success(f"  ✓ Imported {fname} → {db_names[0]}")
-                            else:
-                                err_msg = rc.stderr.decode()[:200] if rc.stderr else "unknown"
-                                if "already exists" in err_msg.lower():
-                                    log.info(f"  ⊘ {fname}: tables already exist — skipped")
-                                else:
-                                    log.warn(f"  SQL import had issues: {err_msg}")
+                        else:
+                            log.warn(f"  No target database for {fname} — skipped")
 
                 elif db_driver in ("pgsql", "postgres") and sql_files:
                     log.step("Auto-importing PostgreSQL schema files")
-
-                    # Detect target database from config files
-                    pgsql_db = self._detect_pgsql_dbname(config["deploy_path"])
 
                     for sql_file in sql_files:
                         fname = os.path.basename(sql_file)
                         log.info(f"Importing SQL: {fname}")
                         # Use cat | psql instead of psql -f to avoid permission issues
                         # (postgres user can't read files owned by svc_* users)
-                        if pgsql_db:
+                        if target_db:
                             rc = _sp.run(
-                                f"cat '{sql_file}' | sudo -u postgres psql -d {pgsql_db}",
+                                f"cat '{sql_file}' | sudo -u postgres psql -d {target_db}",
                                 shell=True, capture_output=True
                             )
                         else:
@@ -398,7 +400,7 @@ class PHPDeployer:
                                 shell=True, capture_output=True
                             )
                         if rc.returncode == 0:
-                            log.success(f"  ✓ Imported {fname}" + (f" → {pgsql_db}" if pgsql_db else ""))
+                            log.success(f"  ✓ Imported {fname}" + (f" → {target_db}" if target_db else ""))
                         else:
                             err_msg = rc.stderr.decode()[:200] if rc.stderr else "unknown"
                             # Ignore "already exists" style errors
@@ -406,6 +408,9 @@ class PHPDeployer:
                                 log.info(f"  ⊘ {fname}: tables already exist — skipped")
                             else:
                                 log.warn(f"  SQL import had issues: {err_msg}")
+
+                # Store credentials for FPM env var injection
+                config["_db_credentials"] = db_credentials
 
             # ── Deploy environment file ─────────────────────────
             hooks.setup_environment_file(config)

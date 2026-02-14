@@ -179,6 +179,29 @@ php_admin_value[opcache.revalidate_freq] = 2
             except Exception as e:
                 self.log.warn(f"Could not parse environment file: {e}")
 
+        # Inject database environment variables from auto-detected credentials
+        db_creds = config.get("_db_credentials", {})
+        if db_creds and db_creds.get("dbname"):
+            pool_content += "\n; Database environment variables (auto-detected)\n"
+            env_map = {
+                "DB_HOST": db_creds.get("host", "localhost"),
+                "DB_PORT": db_creds.get("port", ""),
+                "DB_NAME": db_creds.get("dbname", ""),
+                "DB_DATABASE": db_creds.get("dbname", ""),
+                "DB_USER": db_creds.get("user", ""),
+                "DB_USERNAME": db_creds.get("user", ""),
+                "DB_PASS": db_creds.get("password", ""),
+                "DB_PASSWORD": db_creds.get("password", ""),
+            }
+            # Also set driver-specific env vars
+            db_driver = config.get("_db_driver", "")
+            if db_driver:
+                env_map["DB_CONNECTION"] = db_driver
+            for key, value in env_map.items():
+                if value:
+                    pool_content += f'env[{key}] = "{value}"\n'
+            self.log.info("Injected database env vars into FPM pool")
+
         # Write pool config
         pool_dir = os.path.dirname(pool_config_path)
         os.makedirs(pool_dir, exist_ok=True)

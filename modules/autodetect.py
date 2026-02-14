@@ -142,11 +142,24 @@ class AppAutoDetector:
                 return version
             return None
 
-        # Caret constraint: ^7.3 means >=7.3.0, <8.0.0
-        match = re.match(r'^\^(\d+)\.(\d+)', constraint)
+        # Major-only: "8" or "8.*" — means any 8.x
+        match = re.match(r'^(\d+)(?:\.\*)?$', constraint)
         if match:
             major = int(match.group(1))
-            minor = int(match.group(2))
+            candidates = [
+                v for v in self.SUPPORTED_VERSIONS
+                if self._version_tuple(v)[0] == major
+            ]
+            if candidates:
+                return candidates[-1]
+            return None
+
+        # Caret constraint: ^7.3 means >=7.3.0, <8.0.0
+        # Also handle ^8 (any 8.x)
+        match = re.match(r'^\^(\d+)(?:\.(\d+))?', constraint)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2)) if match.group(2) else 0
             min_version = f"{major}.{minor}"
             # Find highest version with same major
             candidates = [
@@ -159,10 +172,10 @@ class AppAutoDetector:
             return None
 
         # Tilde constraint: ~8.1 means >=8.1.0, <9.0.0 (roughly same as ^)
-        match = re.match(r'^~(\d+)\.(\d+)', constraint)
+        match = re.match(r'^~(\d+)(?:\.(\d+))?', constraint)
         if match:
             major = int(match.group(1))
-            minor = int(match.group(2))
+            minor = int(match.group(2)) if match.group(2) else 0
             min_version = f"{major}.{minor}"
             candidates = [
                 v for v in self.SUPPORTED_VERSIONS
@@ -173,18 +186,22 @@ class AppAutoDetector:
                 return candidates[-1]
             return None
 
-        # Greater-than-or-equal: >=8.1
-        match = re.match(r'^>=\s*(\d+\.\d+)', constraint)
+        # Greater-than-or-equal: >=8.1 or >=8
+        match = re.match(r'^>=\s*(\d+)(?:\.(\d+))?', constraint)
         if match:
-            min_version = match.group(1)
+            major = int(match.group(1))
+            minor = int(match.group(2)) if match.group(2) else 0
+            min_version = f"{major}.{minor}"
             # Check for upper bound: >=8.1 <8.4
-            upper_match = re.search(r'<\s*(\d+)\.(\d+)', constraint)
+            upper_match = re.search(r'<\s*(\d+)(?:\.(\d+))?', constraint)
             candidates = [
                 v for v in self.SUPPORTED_VERSIONS
                 if self._version_tuple(v) >= self._version_tuple(min_version)
             ]
             if upper_match:
-                upper = f"{upper_match.group(1)}.{upper_match.group(2)}"
+                upper_major = int(upper_match.group(1))
+                upper_minor = int(upper_match.group(2)) if upper_match.group(2) else 0
+                upper = f"{upper_major}.{upper_minor}"
                 candidates = [
                     v for v in candidates
                     if self._version_tuple(v) < self._version_tuple(upper)
@@ -193,11 +210,11 @@ class AppAutoDetector:
                 return candidates[-1]
             return None
 
-        # Greater-than: >8.0
-        match = re.match(r'^>\s*(\d+)\.(\d+)', constraint)
+        # Greater-than: >8.0 or >8
+        match = re.match(r'^>\s*(\d+)(?:\.(\d+))?', constraint)
         if match:
             major = int(match.group(1))
-            minor = int(match.group(2))
+            minor = int(match.group(2)) if match.group(2) else 0
             min_version = f"{major}.{minor}"
             candidates = [
                 v for v in self.SUPPORTED_VERSIONS
@@ -217,15 +234,18 @@ class AppAutoDetector:
                 part = part.strip()
                 if not part:
                     continue
-                ge_match = re.match(r'^>=\s*(\d+\.\d+)', part)
-                lt_match = re.match(r'^<\s*(\d+\.\d+)', part)
-                gt_match = re.match(r'^>\s*(\d+\.\d+)', part)
+                ge_match = re.match(r'^>=\s*(\d+(?:\.\d+)?)', part)
+                lt_match = re.match(r'^<\s*(\d+(?:\.\d+)?)', part)
+                gt_match = re.match(r'^>\s*(\d+(?:\.\d+)?)', part)
                 if ge_match:
-                    min_v = ge_match.group(1)
+                    v = ge_match.group(1)
+                    min_v = v if '.' in v else f"{v}.0"
                 elif gt_match:
-                    min_v = gt_match.group(1)
+                    v = gt_match.group(1)
+                    min_v = v if '.' in v else f"{v}.0"
                 elif lt_match:
-                    max_v = lt_match.group(1)
+                    v = lt_match.group(1)
+                    max_v = v if '.' in v else f"{v}.0"
 
             candidates = self.SUPPORTED_VERSIONS[:]
             if min_v:

@@ -26,6 +26,33 @@ class PackageInstaller:
     Never removes existing packages.
     """
 
+    # Map extension names to their actual apt package suffixes.
+    # Some PHP extensions share a package (e.g., pdo_mysql is inside php-mysql).
+    # Keys that map to None should be skipped (bundled in another package).
+    EXT_PACKAGE_MAP = {
+        "pdo_mysql": "mysql",       # pdo_mysql is part of php-mysql
+        "pdo_pgsql": "pgsql",       # pdo_pgsql is part of php-pgsql
+        "pdo_sqlite": "sqlite3",    # pdo_sqlite is part of php-sqlite3
+        "pdo": None,                # PDO core is built into PHP
+        "json": None,               # json is built into PHP 8.0+
+        "openssl": None,            # openssl is built into PHP
+        "zlib": None,               # zlib is built into PHP
+        "filter": None,             # filter is built into PHP
+        "hash": None,               # hash is built into PHP
+        "session": None,            # session is built into PHP
+        "ctype": None,              # ctype is built into PHP
+        "tokenizer": "common",      # tokenizer is in php-common
+        "pcre": None,               # pcre is built into PHP
+        "iconv": None,              # iconv is built into PHP
+        "dom": "xml",               # dom is part of php-xml
+        "simplexml": "xml",         # simplexml is part of php-xml
+        "xmlreader": "xml",
+        "xmlwriter": "xml",
+        "fileinfo": "common",       # fileinfo is in php-common
+        "mysqlnd": "mysql",         # mysqlnd is part of php-mysql
+        "mysqli": "mysql",          # mysqli is part of php-mysql
+    }
+
     def __init__(self, system: SystemDetector, log: DeployLogger):
         self.system = system
         self.log = log
@@ -269,7 +296,19 @@ class PackageInstaller:
             for ext in missing_exts:
                 if ext in ("fpm", "cli", "common"):
                     continue  # Already handled above
-                packages_needed.append(f"php{version}-{ext}")
+
+                # Normalize extension name to actual package name
+                if ext in self.EXT_PACKAGE_MAP:
+                    mapped = self.EXT_PACKAGE_MAP[ext]
+                    if mapped is None:
+                        self.log.debug(f"  Skipping built-in: {ext}")
+                        continue
+                    pkg_name = f"php{version}-{mapped}"
+                else:
+                    pkg_name = f"php{version}-{ext}"
+
+                if pkg_name not in packages_needed:
+                    packages_needed.append(pkg_name)
 
         elif self.os_info["family"] == "rhel":
             ver_nodot = version.replace(".", "")

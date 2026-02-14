@@ -1,0 +1,28 @@
+# .NET ASP.NET Core Application Example
+# ========================================
+# Deploys a .NET app — publishes release, runs Kestrel via systemd, reverse proxy.
+# Auto-detects: .NET SDK version from global.json or .csproj TargetFramework.
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: dotnet-api
+    domain: api.example.com
+    language: dotnet
+    runtime_version: "8.0"         # Optional — auto-detected from global.json/.csproj
+    repo_url: https://github.com/your-org/dotnet-api.git
+    branch: main
+    deploy_path: /var/www/dotnet-api
+
+    # Optional overrides
+    # app_port: 5000
+    # process_manager: systemd
+    # build_command: "dotnet publish -c Release -o ./publish"
+    # start_command: "dotnet ./publish/MyApi.dll"
+
+    environment_vars:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: "http://0.0.0.0:5000"
+      ConnectionStrings__DefaultConnection: "Host=localhost;Database=mydb;Username=user;Password=pass"

@@ -1,0 +1,33 @@
+# Ruby on Rails Application Example
+# ====================================
+# Deploys a Rails app with Puma behind Nginx reverse proxy.
+# Auto-detects: Ruby version, Bundler, Rails framework, database.yml.
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: rails-app
+    domain: app.example.com
+    language: ruby
+    runtime_version: "3.3"         # Optional — auto-detected from .ruby-version or Gemfile
+    repo_url: https://github.com/your-org/rails-app.git
+    branch: main
+    deploy_path: /var/www/rails-app
+
+    # Optional overrides
+    # app_port: 3000
+    # process_manager: systemd
+    # start_command: "bundle exec puma -C config/puma.rb"
+    # install_command: "bundle install --deployment --without development test"
+    # build_command: "RAILS_ENV=production bundle exec rails assets:precompile"
+
+    environment_vars:
+      RAILS_ENV: production
+      RAILS_SERVE_STATIC_FILES: "true"
+      SECRET_KEY_BASE: "change-me-in-production"
+      DATABASE_URL: "postgres://user:pass@localhost:5432/rails_db"
+
+    post_deploy_commands:
+      - "bundle exec rails db:migrate"

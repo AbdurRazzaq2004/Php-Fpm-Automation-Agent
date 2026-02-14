@@ -1,0 +1,39 @@
+# Static Site Example
+# ====================
+# Deploys a static site (React, Vue, Hugo, Jekyll, etc.).
+# Auto-detects framework, runs build, serves via Nginx directly (no proxy).
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  # React (Create React App)
+  - service_name: react-frontend
+    domain: app.example.com
+    language: static
+    repo_url: https://github.com/your-org/react-app.git
+    branch: main
+    deploy_path: /var/www/react-app
+
+    # Document root auto-detected:
+    #   CRA → build/,  Vite → dist/,  Hugo → public/,  Jekyll → _site/
+
+  # Vue + Vite
+  - service_name: vue-dashboard
+    domain: dashboard.example.com
+    language: static
+    repo_url: https://github.com/your-org/vue-dashboard.git
+    branch: main
+    deploy_path: /var/www/vue-dashboard
+
+    environment_vars:
+      VITE_API_URL: https://api.example.com
+
+  # Hugo static site
+  - service_name: hugo-blog
+    domain: blog.example.com
+    language: static
+    repo_url: https://github.com/your-org/hugo-blog.git
+    branch: main
+    deploy_path: /var/www/hugo-blog

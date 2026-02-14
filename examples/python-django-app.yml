@@ -1,0 +1,48 @@
+# Python Django Application Example
+# ==================================
+# Deploys a Django app with Gunicorn behind Nginx reverse proxy.
+# Auto-detects: Python version, pip/poetry, Django framework, DB driver.
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: django-blog
+    domain: blog.example.com
+    language: python
+    runtime_version: "3.12"        # Optional — auto-detected from .python-version or pyproject.toml
+    repo_url: https://github.com/your-org/django-blog.git
+    branch: main
+    deploy_path: /var/www/django-blog
+
+    # Optional overrides (auto-detected if omitted)
+    # app_port: 8000
+    # process_manager: systemd
+    # entry_point: myproject.wsgi:application
+    # start_command: "gunicorn myproject.wsgi:application --bind 0.0.0.0:8000 --workers 4"
+    # install_command: "pip install -r requirements.txt"
+    # build_command: "python manage.py collectstatic --noinput"
+
+    environment_vars:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      ALLOWED_HOSTS: blog.example.com
+      SECRET_KEY: "change-me-in-production"
+      DEBUG: "False"
+
+    post_deploy_commands:
+      - "python manage.py migrate --noinput"
+      - "python manage.py collectstatic --noinput"
+
+  # Flask API example
+  - service_name: flask-api
+    domain: api.example.com
+    language: python
+    repo_url: https://github.com/your-org/flask-api.git
+    branch: main
+    deploy_path: /var/www/flask-api
+    app_port: 5000
+
+    environment_vars:
+      FLASK_ENV: production
+      FLASK_APP: app:create_app

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-PHP-FPM Automation Agent - Main Orchestrator
-==============================================
-Production-grade deployment engine for PHP applications.
+Universal Deployment Automation Agent - Main Orchestrator
+==========================================================
+Production-grade deployment engine for multi-language applications.
+
+Supported Languages:
+    PHP, Python, Node.js, Next.js, Ruby, Go, Java, Rust, .NET, Static Sites
 
 Usage:
     sudo python3 deployer.py deploy                           # uses services.yml (default)
@@ -13,17 +16,21 @@ Usage:
     sudo python3 deployer.py rollback --service myapp --timestamp 20260214_120000
 
 Architecture:
-    YAML Config → Parser → Validator → Detector → Installer →
-    Git Clone → PHP-FPM Pool → Web Server Config → Permissions →
-    Hooks → Validation → Done
+    YAML Config → Parser → Validator → Language Detection →
+    Runtime Install → Dependencies → Build → Process Manager →
+    Web Server Config → Permissions → Hooks → Validation → Done
 
-Author: PHP-FPM Automation Agent
+    PHP path:     PHP-FPM pool → FastCGI socket → Web Server
+    Non-PHP path: Runtime → Process Manager (systemd/PM2) → Reverse Proxy
+
+Author: Universal Deployment Automation Agent
 License: MIT
 """
 
 import argparse
 import os
 import re
+import subprocess
 import sys
 import traceback
 from typing import Dict, List, Optional
@@ -46,11 +53,14 @@ from modules.validation import ValidationEngine
 from modules.hooks import HooksRunner
 from modules.autodetect import AppAutoDetector
 from modules.database import DatabaseManager
+from modules.language_detect import detect_language
+from modules.runtimes import get_runtime
+from modules.process_manager import ProcessManager
 
 
-class PHPDeployer:
+class UniversalDeployer:
     """
-    Main deployment orchestrator.
+    Main deployment orchestrator — multi-language support.
 
     Execution Flow:
     ───────────────────────────────────────────────
@@ -61,28 +71,26 @@ class PHPDeployer:
     5.  Install missing packages (idempotent)
     6.  Create service user (if needed)
     7.  Clone/update repository
-    8.  ** AUTO-DETECT app requirements **
-        - PHP version from composer.json
-        - Framework type (Laravel, Symfony, etc.)
-        - Database driver requirements
-        - Required PHP extensions
-    9.  ** Install correct PHP version (auto-detected) **
-    10. ** Ensure Composer (latest from getcomposer.org) **
-    11. ** Ensure database engine (safe: never overwrite) **
-    12. Deploy environment file
-    13. Run pre-deploy hooks
-    14. Create PHP-FPM pool configuration
-    15. Generate web server vhost
-    16. Set file permissions
-    17. Setup SSL (if enabled)
-    18. Validate all configurations
-    19. Reload PHP-FPM (safe)
-    20. Reload web server (safe: test → reload)
-    21. Run post-deploy hooks (composer install, etc.)
-    22. Fix framework-specific permissions
-    23. Post-deployment health checks
-    24. Save backup manifest
-    25. Print deployment summary
+    8.  ** AUTO-DETECT language (if not explicit) **
+    9.  ** Language-specific setup **
+        PHP:       Auto-detect PHP version/framework/extensions
+                   Install PHP → Composer → FPM pool
+        Non-PHP:   Runtime install → dependencies → build
+                   Process manager (systemd / PM2)
+    10. Detect & provision database
+    11. Deploy environment file
+    12. Run pre-deploy hooks
+    13. Generate web server vhost
+        PHP:    FastCGI proxy to FPM socket
+        Others: HTTP reverse proxy to app_port
+        Static: Direct file serving
+    14. Set file permissions
+    15. Setup SSL (if enabled)
+    16. Reload services
+    17. Run post-deploy hooks
+    18. Post-deployment health checks
+    19. Save backup manifest
+    20. Print deployment summary
     ───────────────────────────────────────────────
 
     On failure: automatic rollback to backed-up state.
@@ -103,7 +111,7 @@ class PHPDeployer:
         Each service is deployed independently with its own
         backup, rollback, and validation context.
         """
-        self.global_log.banner(f"PHP-FPM AUTOMATION AGENT v{self.VERSION}")
+        self.global_log.banner(f"UNIVERSAL DEPLOYMENT AGENT v{self.VERSION}")
         self.global_log.info(f"Config: {config_path}")
         self.global_log.info(f"Mode:   {'DRY RUN' if self.dry_run else 'LIVE'}")
         self.global_log.divider()
@@ -118,9 +126,10 @@ class PHPDeployer:
         services = config["services"]
         self.global_log.info(f"Services to deploy: {len(services)}")
         for svc in services:
+            lang = svc.get("language", "auto")
             self.global_log.info(
                 f"  → {svc['service_name']} ({svc['domain']}) "
-                f"PHP {svc['php_version']} / {svc['web_server']}"
+                f"[{lang}] / {svc['web_server']}"
             )
         self.global_log.divider()
 
@@ -157,9 +166,15 @@ class PHPDeployer:
         log = DeployLogger(service_name=service_name, verbose=self.verbose)
         backup = BackupManager(service_name, log)
 
+        language = config.get("language", "php")
+
         log.banner(f"DEPLOYING: {service_name}")
         log.info(f"Domain:      {config['domain']}")
-        log.info(f"PHP:         {config['php_version']}")
+        log.info(f"Language:    {language}")
+        if language == "php":
+            log.info(f"PHP:         {config.get('php_version', 'auto')}")
+        else:
+            log.info(f"Runtime:     {config.get('runtime_version', 'latest')}")
         log.info(f"Web Server:  {config['web_server']}")
         log.info(f"Deploy Path: {config['deploy_path']}")
         log.info(f"Branch:      {config.get('branch', 'main')}")
@@ -169,13 +184,28 @@ class PHPDeployer:
             # Instantiate modules
             installer = PackageInstaller(system, log)
             git = GitManager(log)
-            fpm = PHPFPMManager(system, log)
             perms = PermissionsManager(log)
             hooks = HooksRunner(log)
             validator = ValidationEngine(system, log)
             ssl_mgr = SSLManager(system, log)
             autodetect = AppAutoDetector(log)
             db_mgr = DatabaseManager(system, log)
+
+            # PHP-FPM only needed for PHP
+            fpm = PHPFPMManager(system, log) if language == "php" else None
+
+            # Non-PHP runtimes
+            runtime = None
+            proc_mgr = None
+            if language != "php":
+                os_info = {
+                    "distro": system.distro,
+                    "distro_version": system.distro_version,
+                    "arch": system.arch,
+                    "pkg_manager": system.pkg_manager,
+                }
+                runtime = get_runtime(language, log, os_info)
+                proc_mgr = ProcessManager(log, os_info)
 
             web_server = config.get("web_server", "nginx")
             if web_server == "nginx":
@@ -209,9 +239,22 @@ class PHPDeployer:
                     return self._handle_failure(backup, log)
 
             # ── Create service user ─────────────────────────────
-            if not fpm.ensure_service_user(config):
-                log.error("Failed to create service user")
-                return self._handle_failure(backup, log)
+            if language == "php" and fpm:
+                if not fpm.ensure_service_user(config):
+                    log.error("Failed to create service user")
+                    return self._handle_failure(backup, log)
+            else:
+                # For non-PHP: create user via standard useradd
+                user = config.get("user", "root")
+                if user != "root":
+                    rc = subprocess.run(
+                        f"id -u {user} 2>/dev/null || useradd --system --shell /usr/sbin/nologin --home {config['deploy_path']} {user}",
+                        shell=True, capture_output=True
+                    )
+                    if rc.returncode == 0:
+                        log.info(f"Service user ready: {user}")
+                    else:
+                        log.warn(f"User creation had issues — continuing")
 
             # ── Create deploy directory ─────────────────────────
             perms.create_deploy_directories(config)
@@ -222,65 +265,84 @@ class PHPDeployer:
                 return self._handle_failure(backup, log)
 
             # ════════════════════════════════════════════════════
-            #   AUTO-DETECTION PHASE
+            #   LANGUAGE DETECTION & AUTO-DETECTION PHASE
             # ════════════════════════════════════════════════════
+
+            # Auto-detect language if set to "auto" or not specified
+            if language == "auto" or not language:
+                detected_lang = detect_language(config["deploy_path"], log)
+                log.info(f"Auto-detected language: {detected_lang}")
+                config["language"] = detected_lang
+                language = detected_lang
+
+                # Re-instantiate runtime if language changed from auto
+                if language != "php":
+                    os_info = {
+                        "distro": system.distro,
+                        "distro_version": system.distro_version,
+                        "arch": system.arch,
+                        "pkg_manager": system.pkg_manager,
+                    }
+                    runtime = get_runtime(language, log, os_info)
+                    proc_mgr = ProcessManager(log, os_info)
+
             log.banner("AUTO-DETECTING APP REQUIREMENTS")
 
-            # Detect PHP version from composer.json
-            detected_php = autodetect.detect_php_version(
-                config["deploy_path"], config.get("php_version")
-            )
-            if detected_php != config.get("php_version"):
-                log.info(
-                    f"Adjusting PHP version: {config.get('php_version')} → {detected_php}"
+            framework_info = {}
+            db_driver = None
+            db_credentials = {}
+
+            if language == "php":
+                # ── PHP-specific auto-detection ─────────────────
+                detected_php = autodetect.detect_php_version(
+                    config["deploy_path"], config.get("php_version")
                 )
-                config["php_version"] = detected_php
-                # Update derived paths
-                config["fpm_socket"] = (
-                    f"/run/php/php{detected_php}-fpm-{service_name}.sock"
-                )
-                config["fpm_pool_config"] = (
-                    f"/etc/php/{detected_php}/fpm/pool.d/{service_name}.conf"
-                )
+                if detected_php != config.get("php_version"):
+                    log.info(
+                        f"Adjusting PHP version: {config.get('php_version')} → {detected_php}"
+                    )
+                    config["php_version"] = detected_php
+                    config["fpm_socket"] = (
+                        f"/run/php/php{detected_php}-fpm-{service_name}.sock"
+                    )
+                    config["fpm_pool_config"] = (
+                        f"/etc/php/{detected_php}/fpm/pool.d/{service_name}.conf"
+                    )
 
-            # Detect framework and requirements
-            framework_info = autodetect.detect_framework(config["deploy_path"])
-            log.info(f"Detected framework: {framework_info['name']}")
+                # Detect framework and requirements
+                framework_info = autodetect.detect_framework(config["deploy_path"])
+                log.info(f"Detected framework: {framework_info['name']}")
 
-            # Auto-set document_root_suffix if not explicitly configured
-            if not config.get("document_root_suffix") and framework_info.get("document_root_suffix"):
-                config["document_root_suffix"] = framework_info["document_root_suffix"]
-                config["document_root"] = (
-                    f"{config['deploy_path']}{framework_info['document_root_suffix']}"
-                )
-                log.info(f"Auto-set document root: {config['document_root']}")
+                # Auto-set document_root_suffix
+                if not config.get("document_root_suffix") and framework_info.get("document_root_suffix"):
+                    config["document_root_suffix"] = framework_info["document_root_suffix"]
+                    config["document_root"] = (
+                        f"{config['deploy_path']}{framework_info['document_root_suffix']}"
+                    )
+                    log.info(f"Auto-set document root: {config['document_root']}")
 
-            # Merge auto-detected extensions with configured ones
-            composer_extensions = autodetect.detect_required_extensions(config["deploy_path"])
-            framework_extensions = framework_info.get("extra_extensions", [])
-            all_extensions = list(set(
-                config.get("php_extensions", []) +
-                composer_extensions +
-                framework_extensions
-            ))
-            config["php_extensions"] = all_extensions
-            log.info(f"PHP extensions: {', '.join(sorted(all_extensions))}")
+                # Merge auto-detected extensions
+                composer_extensions = autodetect.detect_required_extensions(config["deploy_path"])
+                framework_extensions = framework_info.get("extra_extensions", [])
+                all_extensions = list(set(
+                    config.get("php_extensions", []) +
+                    composer_extensions +
+                    framework_extensions
+                ))
+                config["php_extensions"] = all_extensions
+                log.info(f"PHP extensions: {', '.join(sorted(all_extensions))}")
 
-            # Detect database requirements
-            db_driver = framework_info.get("database_driver")
+                # Detect database requirements from PHP framework
+                db_driver = framework_info.get("database_driver")
+                if not db_driver:
+                    exts = config.get("php_extensions", [])
+                    if "mysql" in exts or "pdo_mysql" in exts:
+                        db_driver = "mysql"
+                    elif "pgsql" in exts or "pdo_pgsql" in exts:
+                        db_driver = "pgsql"
+                    elif "sqlite3" in exts:
+                        db_driver = "sqlite"
 
-            # Fallback: check if post_deploy_commands or php_extensions hint at a DB
-            if not db_driver:
-                # Check configured extensions for DB hints
-                exts = config.get("php_extensions", [])
-                if "mysql" in exts or "pdo_mysql" in exts:
-                    db_driver = "mysql"
-                elif "pgsql" in exts or "pdo_pgsql" in exts:
-                    db_driver = "pgsql"
-                elif "sqlite3" in exts:
-                    db_driver = "sqlite"
-
-                # Check post_deploy_commands for DB references
                 if not db_driver:
                     for cmd in config.get("post_deploy_commands", []):
                         cmd_lower = cmd.lower()
@@ -292,15 +354,43 @@ class PHPDeployer:
                             break
 
                 if db_driver:
-                    log.info(f"Database inferred from config/commands: {db_driver}")
+                    log.info(f"Database requirement detected: {db_driver}")
+                    db_extensions = db_mgr.get_required_php_extensions(db_driver)
+                    for ext in db_extensions:
+                        if ext not in config["php_extensions"]:
+                            config["php_extensions"].append(ext)
 
-            if db_driver:
-                log.info(f"Database requirement detected: {db_driver}")
-                # Add database PHP extensions
-                db_extensions = db_mgr.get_required_php_extensions(db_driver)
-                for ext in db_extensions:
-                    if ext not in config["php_extensions"]:
-                        config["php_extensions"].append(ext)
+                db_credentials = framework_info.get("database_credentials", {})
+
+            else:
+                # ── Non-PHP auto-detection ──────────────────────
+                log.info(f"Running {language} runtime detection...")
+
+                # Detect runtime version
+                configured_ver = config.get("runtime_version")
+                detected_ver = runtime.detect_version(config["deploy_path"], configured_ver)
+                if detected_ver:
+                    config["runtime_version"] = detected_ver
+                    log.info(f"Runtime version: {detected_ver}")
+
+                # Detect framework
+                framework_info = runtime.detect_framework(config["deploy_path"])
+                if framework_info.get("name"):
+                    log.info(f"Detected framework: {framework_info['name']}")
+
+                # Auto-set document root for static sites
+                if language == "static":
+                    doc_root = runtime.get_document_root(config["deploy_path"])
+                    if doc_root:
+                        config["document_root"] = doc_root
+                        log.info(f"Auto-set document root: {doc_root}")
+
+                # Detect database from runtime
+                db_driver = framework_info.get("database_driver")
+                db_credentials = framework_info.get("database_credentials", {})
+
+                if db_driver:
+                    log.info(f"Database requirement detected: {db_driver}")
 
             # Store framework info for later use
             config["_framework"] = framework_info
@@ -308,23 +398,46 @@ class PHPDeployer:
 
             log.divider()
 
-            # ── Install PHP (with auto-detected version) ────────
-            if not installer.install_php(config["php_version"], config["php_extensions"]):
-                log.error("Failed to install PHP")
-                return self._handle_failure(backup, log)
+            # ════════════════════════════════════════════════════
+            #   LANGUAGE-SPECIFIC INSTALLATION
+            # ════════════════════════════════════════════════════
 
-            # ── Ensure Composer (latest, from getcomposer.org) ──
-            if os.path.isfile(os.path.join(config["deploy_path"], "composer.json")):
-                if not db_mgr.ensure_composer(config["php_version"]):
-                    log.warn("Composer installation had issues — continuing")
+            if language == "php":
+                # ── Install PHP (with auto-detected version) ────
+                if not installer.install_php(config["php_version"], config["php_extensions"]):
+                    log.error("Failed to install PHP")
+                    return self._handle_failure(backup, log)
 
-            # ── Ensure Database ──────────────────────────────────
-            db_credentials = framework_info.get("database_credentials", {})
+                # ── Ensure Composer ─────────────────────────────
+                if os.path.isfile(os.path.join(config["deploy_path"], "composer.json")):
+                    if not db_mgr.ensure_composer(config["php_version"]):
+                        log.warn("Composer installation had issues — continuing")
+
+            else:
+                # ── Install runtime ─────────────────────────────
+                log.banner(f"INSTALLING {language.upper()} RUNTIME")
+                version = config.get("runtime_version", "latest")
+                if not runtime.install(version, config):
+                    log.error(f"Failed to install {language} runtime")
+                    return self._handle_failure(backup, log)
+
+                # ── Install dependencies ────────────────────────
+                log.step("Installing dependencies")
+                if not runtime.install_dependencies(config):
+                    log.warn("Dependency installation had issues — continuing")
+
+                # ── Build application ───────────────────────────
+                log.step("Building application")
+                if not runtime.build(config):
+                    log.warn("Build step had issues — continuing")
+
+            # ════════════════════════════════════════════════════
+            #   DATABASE PROVISIONING (all languages)
+            # ════════════════════════════════════════════════════
             if db_driver:
                 if not db_mgr.ensure_database(db_driver, config):
                     log.warn(f"Database setup for {db_driver} had issues — continuing")
 
-                # Provision database and user from extracted credentials
                 if db_credentials and db_credentials.get("dbname"):
                     db_mgr.provision_database(db_driver, db_credentials)
 
@@ -332,9 +445,6 @@ class PHPDeployer:
                 sql_files = framework_info.get("sql_files", [])
                 db_names = framework_info.get("database_names", [])
 
-                import subprocess as _sp
-
-                # Determine target database name for SQL imports
                 target_db = (
                     db_credentials.get("dbname")
                     or self._detect_pgsql_dbname(config["deploy_path"])
@@ -343,30 +453,24 @@ class PHPDeployer:
 
                 if db_driver == "mysql" and (sql_files or db_names):
                     log.step("Auto-importing MySQL schema files")
-
-                    # Create databases from SQL files (safe: IF NOT EXISTS)
                     for db_name in db_names:
-                        if db_name != target_db:  # Don't duplicate if already provisioned
+                        if db_name != target_db:
                             log.info(f"Creating database: {db_name}")
-                            _sp.run(
+                            subprocess.run(
                                 f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{db_name}`;'",
                                 shell=True, capture_output=True
                             )
-
-                    # Import SQL files
                     import_db = target_db or (db_names[0] if db_names else None)
                     for sql_file in sql_files:
                         fname = os.path.basename(sql_file)
                         log.info(f"Importing SQL: {fname}")
-                        # Parse which DB this file targets
                         sql_info = autodetect._extract_table_sql([sql_file])
                         file_target_db = None
                         if sql_info and sql_info[0].get("database"):
                             file_target_db = sql_info[0]["database"]
-
                         use_db = file_target_db or import_db
                         if use_db:
-                            rc = _sp.run(
+                            rc = subprocess.run(
                                 f"grep -iv 'create database' '{sql_file}' | mysql -u root {use_db}",
                                 shell=True, capture_output=True
                             )
@@ -383,19 +487,16 @@ class PHPDeployer:
 
                 elif db_driver in ("pgsql", "postgres") and sql_files:
                     log.step("Auto-importing PostgreSQL schema files")
-
                     for sql_file in sql_files:
                         fname = os.path.basename(sql_file)
                         log.info(f"Importing SQL: {fname}")
-                        # Use cat | psql instead of psql -f to avoid permission issues
-                        # (postgres user can't read files owned by svc_* users)
                         if target_db:
-                            rc = _sp.run(
+                            rc = subprocess.run(
                                 f"cat '{sql_file}' | sudo -u postgres psql -d {target_db}",
                                 shell=True, capture_output=True
                             )
                         else:
-                            rc = _sp.run(
+                            rc = subprocess.run(
                                 f"cat '{sql_file}' | sudo -u postgres psql",
                                 shell=True, capture_output=True
                             )
@@ -403,13 +504,12 @@ class PHPDeployer:
                             log.success(f"  ✓ Imported {fname}" + (f" → {target_db}" if target_db else ""))
                         else:
                             err_msg = rc.stderr.decode()[:200] if rc.stderr else "unknown"
-                            # Ignore "already exists" style errors
                             if "already exists" in err_msg.lower():
                                 log.info(f"  ⊘ {fname}: tables already exist — skipped")
                             else:
                                 log.warn(f"  SQL import had issues: {err_msg}")
 
-                # Store credentials for FPM env var injection
+                # Store credentials for env var injection
                 config["_db_credentials"] = db_credentials
 
             # ── Deploy environment file ─────────────────────────
@@ -420,10 +520,17 @@ class PHPDeployer:
                 log.warn("Pre-deploy hooks had failures")
                 # Continue — hooks are advisory by default
 
-            # ── Create PHP-FPM pool ─────────────────────────────
-            if not fpm.create_pool(config, backup):
-                log.error("Failed to create PHP-FPM pool")
-                return self._handle_failure(backup, log)
+            # ── Create PHP-FPM pool (PHP only) ──────────────────
+            if language == "php" and fpm:
+                if not fpm.create_pool(config, backup):
+                    log.error("Failed to create PHP-FPM pool")
+                    return self._handle_failure(backup, log)
+
+            # ── Setup process manager (non-PHP) ─────────────────
+            if language != "php" and language != "static" and proc_mgr:
+                if not proc_mgr.setup_service(config, runtime):
+                    log.error("Failed to setup process manager")
+                    return self._handle_failure(backup, log)
 
             # ── Generate web server config ──────────────────────
             if not web_config.generate_vhost(config, backup):
@@ -440,10 +547,11 @@ class PHPDeployer:
                 ssl_mgr.setup_ssl(config)
                 # SSL failure is non-fatal — service works on HTTP
 
-            # ── Reload PHP-FPM ──────────────────────────────────
-            if not fpm.reload_fpm(config):
-                log.error("PHP-FPM reload failed")
-                return self._handle_failure(backup, log)
+            # ── Reload PHP-FPM (PHP only) ───────────────────────
+            if language == "php" and fpm:
+                if not fpm.reload_fpm(config):
+                    log.error("PHP-FPM reload failed")
+                    return self._handle_failure(backup, log)
 
             # ── Reload web server ───────────────────────────────
             if not web_config.safe_reload():
@@ -463,7 +571,7 @@ class PHPDeployer:
                 )
                 config["post_deploy_commands"] = framework["post_deploy_commands"]
 
-            hooks.run_composer_install(config)
+            hooks.run_composer_install(config) if language == "php" else None
             if not hooks.run_post_deploy(config):
                 log.warn("Post-deploy hooks had failures")
 
@@ -590,16 +698,23 @@ class PHPDeployer:
 
         # Show parsed config summary
         for svc in config["services"]:
+            lang = svc.get("language", "php")
             self.global_log.info(f"\nService: {svc['service_name']}")
+            self.global_log.info(f"  Language:     {lang}")
             self.global_log.info(f"  Domain:       {svc['domain']}")
-            self.global_log.info(f"  PHP:          {svc['php_version']}")
+            if lang == "php":
+                self.global_log.info(f"  PHP:          {svc.get('php_version', 'auto')}")
+                self.global_log.info(f"  FPM Socket:   {svc.get('fpm_socket', 'N/A')}")
+                self.global_log.info(f"  FPM Pool:     {svc.get('fpm_pool_config', 'N/A')}")
+                self.global_log.info(f"  Extensions:   {', '.join(svc.get('php_extensions', []))}")
+            else:
+                self.global_log.info(f"  Runtime:      {svc.get('runtime_version', 'latest')}")
+                self.global_log.info(f"  App Port:     {svc.get('app_port', 'N/A')}")
+                self.global_log.info(f"  Process Mgr:  {svc.get('process_manager', 'systemd')}")
             self.global_log.info(f"  Web Server:   {svc['web_server']}")
             self.global_log.info(f"  Deploy Path:  {svc['deploy_path']}")
-            self.global_log.info(f"  FPM Socket:   {svc['fpm_socket']}")
-            self.global_log.info(f"  FPM Pool:     {svc['fpm_pool_config']}")
             self.global_log.info(f"  User:         {svc['user']}")
             self.global_log.info(f"  SSL:          {svc.get('enable_ssl', False)}")
-            self.global_log.info(f"  Extensions:   {', '.join(svc['php_extensions'])}")
             self.global_log.info(f"  Doc Root:     {svc['document_root']}")
 
         return True
@@ -619,25 +734,68 @@ class PHPDeployer:
 
         for svc in config["services"]:
             name = svc["service_name"]
+            lang = svc.get("language", "php")
             self.global_log.divider()
-            self.global_log.info(f"Service: {name}")
+            self.global_log.info(f"Service: {name} [{lang}]")
 
             # Check deployment
             deploy_path = svc["deploy_path"]
             deployed = os.path.isdir(deploy_path) and os.listdir(deploy_path)
             self.global_log.info(f"  Deployed:     {'YES' if deployed else 'NO'}")
 
-            # Check PHP-FPM
-            fpm_running = system.is_php_fpm_running(svc["php_version"])
-            self.global_log.info(f"  PHP-FPM:      {'RUNNING' if fpm_running else 'STOPPED'}")
+            # Language-specific process checks
+            if lang == "php":
+                # Check PHP-FPM
+                fpm_running = system.is_php_fpm_running(svc.get("php_version", "8.2"))
+                self.global_log.info(f"  PHP-FPM:      {'RUNNING' if fpm_running else 'STOPPED'}")
 
-            # Check socket
-            socket_exists = os.path.exists(svc["fpm_socket"])
-            self.global_log.info(f"  FPM Socket:   {'EXISTS' if socket_exists else 'MISSING'}")
+                # Check socket
+                socket_path = svc.get("fpm_socket", "")
+                if socket_path:
+                    socket_exists = os.path.exists(socket_path)
+                    self.global_log.info(f"  FPM Socket:   {'EXISTS' if socket_exists else 'MISSING'}")
 
-            # Check pool config
-            pool_exists = os.path.isfile(svc["fpm_pool_config"])
-            self.global_log.info(f"  Pool Config:  {'EXISTS' if pool_exists else 'MISSING'}")
+                # Check pool config
+                pool_path = svc.get("fpm_pool_config", "")
+                if pool_path:
+                    pool_exists = os.path.isfile(pool_path)
+                    self.global_log.info(f"  Pool Config:  {'EXISTS' if pool_exists else 'MISSING'}")
+
+            elif lang == "static":
+                self.global_log.info(f"  Process:      N/A (static site)")
+
+            else:
+                # Check systemd/PM2 service
+                svc_name = svc.get("systemd_service") or name
+                proc_manager = svc.get("process_manager", "systemd")
+                if proc_manager == "pm2" or lang in ("node", "nextjs"):
+                    # Check PM2
+                    rc = subprocess.run(
+                        f"pm2 show {name} 2>/dev/null | grep status",
+                        shell=True, capture_output=True, text=True
+                    )
+                    if rc.returncode == 0 and "online" in rc.stdout.lower():
+                        self.global_log.info(f"  PM2:          RUNNING")
+                    else:
+                        self.global_log.info(f"  PM2:          STOPPED")
+                else:
+                    # Check systemd
+                    rc = subprocess.run(
+                        f"systemctl is-active {svc_name}.service 2>/dev/null",
+                        shell=True, capture_output=True, text=True
+                    )
+                    status_str = rc.stdout.strip()
+                    self.global_log.info(f"  Systemd:      {status_str.upper() if status_str else 'UNKNOWN'}")
+
+                # Check app port
+                app_port = svc.get("app_port")
+                if app_port:
+                    rc = subprocess.run(
+                        f"ss -tlnp | grep :{app_port}",
+                        shell=True, capture_output=True, text=True
+                    )
+                    port_listening = rc.returncode == 0 and str(app_port) in rc.stdout
+                    self.global_log.info(f"  Port {app_port}:     {'LISTENING' if port_listening else 'NOT LISTENING'}")
 
             # Check web server
             web = svc.get("web_server", "nginx")
@@ -733,10 +891,12 @@ class PHPDeployer:
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="php-deployer",
-        description="PHP-FPM Automation Agent - Production Deployment Engine",
+        prog="universal-deployer",
+        description="Universal Deployment Agent - Multi-Language Production Deployment Engine",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Supported Languages: PHP, Python, Node.js, Next.js, Ruby, Go, Java, Rust, .NET, Static
+
 Examples:
   # Deploy services from config
   sudo python3 deployer.py deploy --config services.yml
@@ -799,7 +959,7 @@ Examples:
     verbose = getattr(args, "verbose", False)
     dry_run = getattr(args, "dry_run", False)
 
-    deployer = PHPDeployer(verbose=verbose, dry_run=dry_run)
+    deployer = UniversalDeployer(verbose=verbose, dry_run=dry_run)
 
     if args.command == "deploy":
         success = deployer.deploy(args.config)

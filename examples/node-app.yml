@@ -1,0 +1,32 @@
+# Node.js Application Example
+# =============================
+# Deploys a Node.js app with PM2 behind Nginx reverse proxy.
+# Auto-detects: Node version, npm/yarn/pnpm, framework (Express/Fastify/NestJS).
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: express-api
+    domain: api.example.com
+    language: node
+    runtime_version: "20"          # Optional — auto-detected from .nvmrc or package.json engines
+    repo_url: https://github.com/your-org/express-api.git
+    branch: main
+    deploy_path: /var/www/express-api
+
+    # Optional overrides (auto-detected if omitted)
+    # app_port: 3000
+    # process_manager: pm2           # Default for Node.js
+    # node_instances: max            # PM2 cluster mode (default: max CPUs)
+    # node_max_memory: 512           # MB — PM2 auto-restart threshold
+    # start_command: "node server.js"
+    # install_command: "npm ci --production"
+
+    environment_vars:
+      NODE_ENV: production
+      PORT: "3000"
+
+    post_deploy_commands:
+      - "npx prisma migrate deploy"   # Example: Prisma ORM migration

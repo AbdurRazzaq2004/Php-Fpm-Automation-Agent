@@ -1,0 +1,35 @@
+# Next.js SSR Application Example
+# =================================
+# Deploys a Next.js app with PM2, builds for SSR, reverse proxy via Nginx.
+# Auto-detects: Node version, standalone/export output, framework config.
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: nextjs-storefront
+    domain: shop.example.com
+    language: nextjs
+    runtime_version: "20"
+    repo_url: https://github.com/your-org/nextjs-store.git
+    branch: main
+    deploy_path: /var/www/nextjs-store
+
+    # Optional overrides
+    # app_port: 3000
+    # process_manager: pm2
+    # build_command: "npx next build"
+    # start_command: "node .next/standalone/server.js"  # For standalone output
+
+    environment_vars:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: https://api.example.com
+
+  # Next.js Static Export example (no process manager needed)
+  - service_name: nextjs-docs
+    domain: docs.example.com
+    language: static                # Use 'static' if next.config.js has output: 'export'
+    repo_url: https://github.com/your-org/nextjs-docs.git
+    branch: main
+    deploy_path: /var/www/nextjs-docs

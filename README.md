@@ -1,15 +1,16 @@
-# PHP-FPM Automation Agent
+# Universal Deployment Automation Agent
 
-**Production-grade, YAML-driven deployment engine for PHP applications on Linux servers.**
+**Production-grade, YAML-driven deployment engine for multi-language applications on Linux servers.**
 
-Safely deploy multiple PHP applications on the same server with isolated PHP-FPM pools, automatic web server configuration, and zero-downtime reloads.
+Deploy applications in **PHP, Python, Node.js, Next.js, Ruby, Go, Java, Rust, .NET**, and **static sites** — all from a single YAML config. Each language gets its own runtime, process manager, and web server configuration, fully automated.
 
-**Now with Smart Auto-Detection** — the agent reads your `composer.json` and automatically configures PHP version, extensions, database, and framework-specific settings. Deploy any PHP app with just 4 lines of config!
+**Smart Auto-Detection** — the agent analyzes your repository and automatically configures the runtime version, framework, dependencies, database, and process manager. Deploy any app with just a few lines of config!
 
 ---
 
 ## Table of Contents
 
+- [Supported Languages](#supported-languages)
 - [Smart Auto-Detection](#smart-auto-detection)
 - [Architecture Overview](#architecture-overview)
 - [Features](#features)
@@ -29,45 +30,78 @@ Safely deploy multiple PHP applications on the same server with isolated PHP-FPM
 
 ---
 
+## Supported Languages
+
+| Language | Runtime | Process Manager | Web Server Mode |
+|----------|---------|-----------------|-----------------|
+| **PHP** | PHP-FPM | PHP-FPM pools | FastCGI proxy |
+| **Python** | CPython + venv | systemd (Gunicorn/Uvicorn) | Reverse proxy |
+| **Node.js** | Node.js (NodeSource) | PM2 (cluster mode) | Reverse proxy |
+| **Next.js** | Node.js | PM2 | Reverse proxy |
+| **Ruby** | Ruby + Bundler | systemd (Puma) | Reverse proxy |
+| **Go** | Go (official binary) | systemd | Reverse proxy |
+| **Java** | OpenJDK + Maven/Gradle | systemd | Reverse proxy |
+| **Rust** | rustup + Cargo | systemd | Reverse proxy |
+| **.NET** | .NET SDK (Microsoft) | systemd (Kestrel) | Reverse proxy |
+| **Static** | Node.js/Hugo/Jekyll (build) | None | Direct file serving |
+
+---
+
 ## Smart Auto-Detection
 
-The agent intelligently analyzes your repository after cloning and automatically configures the deployment. **No PHP or framework expertise required!**
+The agent intelligently analyzes your repository after cloning and automatically configures the deployment. **No expertise in any specific language required!**
 
-### What Gets Auto-Detected
+### Language Detection
+
+If you don't specify `language:` in your config, the agent auto-detects it from your repository:
+
+| Indicator File | Detected Language |
+|---------------|-------------------|
+| `composer.json` | PHP |
+| `requirements.txt`, `pyproject.toml`, `Pipfile` | Python |
+| `package.json` (with `next` dep) | Next.js |
+| `package.json` (with `express`, etc.) | Node.js |
+| `package.json` (with `react-scripts`, `vite`) | Static |
+| `Gemfile`, `config.ru` | Ruby |
+| `go.mod` | Go |
+| `pom.xml`, `build.gradle` | Java |
+| `Cargo.toml` | Rust |
+| `*.csproj`, `global.json` | .NET |
+| `hugo.toml` | Static |
+
+### What Gets Auto-Detected (All Languages)
 
 | Feature | How It Works |
 |---------|-------------|
-| **PHP Version** | Reads `require.php` from `composer.json` (supports `^8.2`, `>=8.1`, `~7.4`, `7.4\|8.0\|8.1` constraints) |
-| **Framework** | Detects Laravel, Symfony, WordPress, CodeIgniter, Slim from dependencies |
-| **Database** | Reads `.env`, `.env.example`, `config/database.php` to find MySQL/PostgreSQL/SQLite |
-| **PHP Extensions** | Merges `ext-*` from `composer.json` + framework requirements + DB driver extensions |
-| **Document Root** | Auto-sets `/public` for Laravel/Symfony, `/web` for Symfony 4+ |
-| **Post-Deploy Commands** | Generates framework-specific commands (artisan, composer, migrations, caching) |
-| **Writable Directories** | Sets `storage/`, `bootstrap/cache/` for Laravel, `var/` for Symfony |
-| **Composer** | Installs latest Composer from getcomposer.org if missing or outdated |
-| **Branch** | Detects default branch from remote if specified branch doesn't exist |
+| **Language** | Detected from indicator files (composer.json, go.mod, package.json, etc.) |
+| **Runtime Version** | Read from language-specific config files (.python-version, go.mod, .nvmrc, etc.) |
+| **Framework** | Detected from dependencies (Laravel, Django, Express, Spring Boot, Rails, Gin, etc.) |
+| **Database** | Read from config files (.env, settings.py, application.properties, database.yml) |
+| **Package Manager** | Auto-detected (pip/poetry, npm/yarn/pnpm, bundler, maven/gradle, cargo) |
+| **Document Root** | Auto-set per framework (Laravel→/public, React→/build, Vue→/dist, Hugo→/public) |
+| **Post-Deploy** | Framework-specific commands (migrations, asset compilation, cache clearing) |
+| **Process Manager** | PHP→FPM, Node/Next→PM2, everything else→systemd |
 
 ### Minimal Config (Auto-Detection Handles the Rest)
 
 ```yaml
-service_name: my-app
-domain: app.example.com
-repo_url: https://github.com/your-org/your-app.git
-branch: main
-deploy_path: /var/www/my-app
+services:
+  - service_name: my-app
+    domain: app.example.com
+    repo_url: https://github.com/your-org/your-app.git
+    branch: main
+    deploy_path: /var/www/my-app
+    # language: auto  ← detected automatically!
 ```
 
-That's it! The agent will:
-1. Clone the repo
-2. Read `composer.json` → detect PHP 8.2 is required
-3. Detect it's a Laravel app → set document root to `/public`
-4. Find `ext-bcmath`, `ext-mbstring` in composer.json → install those extensions
-5. Detect SQLite from `.env` → install php-sqlite3 + create database file
-6. Install latest Composer from getcomposer.org
-7. Generate post-deploy commands: `composer install`, `artisan key:generate`, `artisan migrate`, cache commands
-8. Set `storage/` and `bootstrap/cache/` writable
-9. Configure PHP-FPM pool + Nginx vhost
-10. Verify everything works with health checks
+### PHP-Specific Auto-Detection
+
+For PHP apps, the agent also reads `composer.json` to detect:
+- PHP version constraints (`^8.2`, `>=8.1`, `~7.4`)
+- Required extensions (`ext-bcmath`, `ext-mbstring`, etc.)
+- Framework type (Laravel, Symfony, WordPress, CodeIgniter, Slim)
+- Database driver from `.env` files
+- Composer is installed automatically from getcomposer.org
 
 ### Database Safety
 
@@ -85,28 +119,25 @@ The agent **never overwrites existing databases**:
 ┌─────────────────────────────────────────────────────────────┐
 │                    YAML Configuration                       │
 │              (services.yml / multi-app.yml)                  │
+│              language: php | python | node | ...             │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   Config Parser                             │
 │          (Parse → Validate → Apply Defaults)                │
-│          (Conflict Detection between services)              │
+│     (Language-specific defaults, conflict detection)        │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                 System Detector                             │
-│  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌──────────────┐  │
-│  │    OS    │ │  Nginx   │ │  Apache   │ │ PHP Versions │  │
-│  │ Detection│ │ Detection│ │ Detection │ │  Detection   │  │
-│  └──────────┘ └──────────┘ └───────────┘ └──────────────┘  │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Validation Engine (Pre-flight)                  │
-│    Root check │ Disk space │ Port conflicts │ DNS check      │
+│              Language Detection & Auto-Detection             │
+│  ┌──────────────┐ ┌────────────┐ ┌───────────────────────┐  │
+│  │   Language   │ │  Runtime   │ │ Framework Detection  │  │
+│  │  Detection   │ │  Version   │ │ (Django, Express,    │  │
+│  │(indicator    │ │ Detection  │ │  Rails, Spring, etc) │  │
+│  │ files)       │ │            │ │                      │  │
+│  └──────────────┘ └────────────┘ └───────────────────────┘  │
 └──────────────────────┬──────────────────────────────────────┘
                        │
           ┌────────────┼───────────────┐
@@ -114,25 +145,24 @@ The agent **never overwrites existing databases**:
    ┌────────────┐ ┌──────────┐ ┌─────────────┐
    │  Package   │ │   Git    │ │   Backup    │
    │ Installer  │ │ Manager  │ │  Manager    │
-   │ (idempot.) │ │ (PAT+    │ │ (rollback)  │
-   │            │ │ branch   │ │             │
-   │            │ │ detect)  │ │             │
    └─────┬──────┘ └────┬─────┘ └──────┬──────┘
          │             │              │
          ▼             ▼              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│           ★ Smart Auto-Detection Phase ★                    │
+│           ★ Language-Specific Installation ★                │
+│                                                             │
+│  PHP Path:                                                  │
 │  ┌──────────────┐ ┌────────────┐ ┌───────────────────────┐  │
-│  │ PHP Version  │ │ Framework  │ │ Database Driver      │  │
-│  │ Detection    │ │ Detection  │ │ Detection            │  │
-│  │(composer.json│ │(Laravel,   │ │(.env, config/*.php)  │  │
-│  │ constraints) │ │ Symfony,..)│ │                      │  │
+│  │ Install PHP  │ │  Composer  │ │ PHP-FPM Pool Config  │  │
+│  │ + Extensions │ │ (official) │ │ (isolated per app)   │  │
 │  └──────────────┘ └────────────┘ └───────────────────────┘  │
+│                                                             │
+│  Non-PHP Path:                                              │
 │  ┌──────────────┐ ┌────────────┐ ┌───────────────────────┐  │
-│  │  Extension   │ │ Composer   │ │ Database Engine      │  │
-│  │  Merging     │ │ Installer  │ │ (safe: never         │  │
-│  │(composer.json│ │ (latest    │ │  overwrites)         │  │
-│  │ + framework) │ │ official)  │ │                      │  │
+│  │ Install      │ │ Install    │ │ Build Application    │  │
+│  │ Runtime      │ │ Deps       │ │ (compile/bundle)     │  │
+│  │(Python/Node/ │ │(pip/npm/   │ │                      │  │
+│  │ Go/Java/etc) │ │ cargo/etc) │ │                      │  │
 │  └──────────────┘ └────────────┘ └───────────────────────┘  │
 └──────────────────────┬──────────────────────────────────────┘
                        │
@@ -140,28 +170,22 @@ The agent **never overwrites existing databases**:
 ┌─────────────────────────────────────────────────────────────┐
 │               Deployment Engine (per service)               │
 │  ┌──────────┐ ┌──────────────┐ ┌─────────────────────────┐  │
-│  │ PHP-FPM  │ │  Web Server  │ │    Permissions &        │  │
-│  │  Pool    │ │  Configurator│ │    Hooks Runner         │  │
-│  │ Manager  │ │ (Nginx/Apache│ │ (composer, artisan,etc) │  │
+│  │ Process  │ │  Web Server  │ │    Permissions &        │  │
+│  │ Manager  │ │  Configurator│ │    Hooks Runner         │  │
+│  │(FPM/syst │ │ (Nginx/Apach │ │                         │  │
+│  │ emd/PM2) │ │ e+proxy)     │ │                         │  │
 │  └──────────┘ └──────────────┘ └─────────────────────────┘  │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│            Safe Reload (test → reload, not restart)         │
-│        nginx -t → reload  │  configtest → reload            │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│          ★ Smart Post-Deploy (framework-aware) ★            │
-│   Auto-generated commands │ Writable dirs │ DB setup         │
+│                                                             │
+│  Web Server Modes:                                          │
+│  PHP    → FastCGI proxy to FPM socket                       │
+│  Others → HTTP reverse proxy to app_port                    │
+│  Static → Direct file serving (SPA routing)                 │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │             Validation Engine (Post-deploy)                  │
-│   Service check │ Socket check │ HTTP health │ Permissions   │
+│   Service check │ Port check │ HTTP health │ Permissions    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -170,18 +194,18 @@ The agent **never overwrites existing databases**:
 ## Features
 
 ### Smart Auto-Detection
-- **PHP version detection** — reads `composer.json` constraints (`^8.2`, `>=8.1`, etc.)
-- **Framework detection** — Laravel, Symfony, WordPress, CodeIgniter, Slim
-- **Database detection** — MySQL, PostgreSQL, SQLite from `.env` / config files
-- **Extension auto-merge** — combines composer.json `ext-*` + framework + DB extensions
+- **Language detection** — auto-detects from repository indicator files
+- **Runtime version detection** — reads composer.json, .python-version, go.mod, .nvmrc, etc.
+- **Framework detection** — Laravel, Django, Flask, Express, Spring Boot, Rails, Gin, and more
+- **Database detection** — MySQL, PostgreSQL, SQLite from config files across all languages
+- **Package manager detection** — pip/poetry, npm/yarn/pnpm, bundler, maven/gradle, cargo
 - **Smart branch handling** — detects default branch, falls back if specified branch missing
-- **Composer management** — installs latest from getcomposer.org (not broken apt version)
-- **Database safety** — detects pre-installed databases, never overwrites existing data
+- **Process manager selection** — PHP-FPM for PHP, PM2 for Node/Next, systemd for others
 
 ### Core Capabilities
 - **YAML-driven** — define services declaratively, deploy with one command
+- **Multi-language** — PHP, Python, Node.js, Next.js, Ruby, Go, Java, Rust, .NET, Static
 - **Multi-service** — deploy N applications on the same server safely
-- **Multi-PHP** — run PHP 7.4, 8.1, 8.2, 8.3 simultaneously
 - **Multi-web-server** — Nginx and Apache support (even mixed on same server)
 - **Private repos** — secure PAT token cloning (tokens never logged)
 - **Idempotent** — safe to run multiple times without side effects
@@ -796,21 +820,45 @@ php-fpm-automation/
 │   ├── packages.py          # Idempotent package installer
 │   ├── git.py               # Secure git operations (PAT + smart branch)
 │   ├── phpfpm.py            # PHP-FPM pool manager
-│   ├── nginx.py             # Nginx vhost generator
-│   ├── apache.py            # Apache vhost generator
+│   ├── nginx.py             # Nginx/Apache vhost generator (FastCGI + reverse proxy)
+│   ├── apache.py            # Apache vhost generator (FastCGI + reverse proxy)
 │   ├── ssl.py               # SSL/TLS certificate manager
 │   ├── permissions.py       # File ownership & permissions
 │   ├── hooks.py             # Pre/post deploy hooks runner
 │   ├── validation.py        # Pre-flight & post-deploy checks
 │   ├── autodetect.py        # ★ Smart PHP/framework/DB auto-detection
-│   └── database.py          # ★ Safe database & Composer management
+│   ├── database.py          # ★ Safe database & Composer management
+│   ├── language_detect.py   # ★ Multi-language auto-detection
+│   ├── process_manager.py   # ★ Systemd & PM2 process management
+│   │
+│   └── runtimes/            # ★ Language-specific runtime modules
+│       ├── __init__.py      # Runtime registry & factory
+│       ├── base.py          # Abstract base class for all runtimes
+│       ├── python_runtime.py  # Python (Django, Flask, FastAPI)
+│       ├── node_runtime.py    # Node.js (Express, Koa, NestJS)
+│       ├── nextjs_runtime.py  # Next.js SSR
+│       ├── ruby_runtime.py    # Ruby (Rails, Sinatra)
+│       ├── go_runtime.py      # Go (Gin, Echo, Fiber)
+│       ├── java_runtime.py    # Java (Spring Boot, Quarkus)
+│       ├── rust_runtime.py    # Rust (Actix, Axum, Rocket)
+│       ├── dotnet_runtime.py  # .NET (ASP.NET Core)
+│       └── static_runtime.py  # Static sites (React, Vue, Hugo)
 │
 └── examples/
     ├── single-app.yml       # Single PHP app (minimal config)
     ├── multi-app.yml        # Multiple apps on same server
     ├── laravel-app.yml      # Laravel with auto-detection
     ├── wordpress-app.yml    # WordPress with Apache
-    └── mixed-stack.yml      # Mixed PHP versions + web servers
+    ├── mixed-stack.yml      # Mixed PHP versions + web servers
+    ├── python-django-app.yml  # Python Django/Flask
+    ├── node-app.yml           # Node.js Express
+    ├── nextjs-app.yml         # Next.js SSR
+    ├── go-app.yml             # Go API
+    ├── java-spring-app.yml    # Java Spring Boot
+    ├── ruby-rails-app.yml     # Ruby on Rails
+    ├── rust-app.yml           # Rust API
+    ├── dotnet-app.yml         # .NET ASP.NET Core
+    └── static-site.yml        # Static sites (React, Vue, Hugo)
 ```
 
 ---

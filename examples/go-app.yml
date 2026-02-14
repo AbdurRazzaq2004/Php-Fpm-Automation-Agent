@@ -1,0 +1,28 @@
+# Go Application Example
+# =======================
+# Deploys a Go app — compiles binary, runs via systemd, reverse proxy via Nginx.
+# Auto-detects: Go version from go.mod, framework (Gin/Echo/Fiber).
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: go-api
+    domain: api.example.com
+    language: go
+    runtime_version: "1.22"        # Optional — auto-detected from go.mod
+    repo_url: https://github.com/your-org/go-api.git
+    branch: main
+    deploy_path: /var/www/go-api
+
+    # Optional overrides
+    # app_port: 8080
+    # process_manager: systemd
+    # build_command: "CGO_ENABLED=0 go build -ldflags='-s -w' -o app ."
+    # start_command: "/var/www/go-api/app"
+
+    environment_vars:
+      GIN_MODE: release
+      PORT: "8080"
+      DATABASE_URL: "postgres://user:pass@localhost:5432/mydb"

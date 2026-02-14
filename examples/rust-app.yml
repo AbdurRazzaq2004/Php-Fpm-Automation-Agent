@@ -1,0 +1,27 @@
+# Rust Application Example
+# =========================
+# Deploys a Rust app — compiles release binary, runs via systemd, reverse proxy.
+# Auto-detects: Rust toolchain, framework (Actix/Axum/Rocket) from Cargo.toml.
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: rust-api
+    domain: api.example.com
+    language: rust
+    repo_url: https://github.com/your-org/rust-api.git
+    branch: main
+    deploy_path: /var/www/rust-api
+
+    # Optional overrides
+    # app_port: 8080
+    # process_manager: systemd
+    # build_command: "cargo build --release"
+    # start_command: "/var/www/rust-api/target/release/rust-api"
+
+    environment_vars:
+      RUST_LOG: info
+      PORT: "8080"
+      DATABASE_URL: "postgres://user:pass@localhost:5432/mydb"

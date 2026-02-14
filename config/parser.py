@@ -1,8 +1,9 @@
 """
-Config Parser - PHP-FPM Automation Agent
-==========================================
+Config Parser - Universal Deployment Automation Agent
+=====================================================
 Parses and validates YAML configuration files.
 Applies defaults, normalizes values, and detects conflicts.
+Supports multi-language deployments (PHP, Python, Node, etc.)
 """
 
 import os
@@ -12,8 +13,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.schema import (
     FIELD_VALIDATORS,
+    LANGUAGE_DEFAULTS,
     REQUIRED_FIELDS,
     SERVICE_DEFAULTS,
+    SUPPORTED_LANGUAGES,
     SUPPORTED_PHP_VERSIONS,
     SUPPORTED_WEB_SERVERS,
 )
@@ -144,6 +147,22 @@ class ConfigParser:
         # Normalize deploy_path
         config["deploy_path"] = config["deploy_path"].rstrip("/")
 
+        # Apply language-specific defaults (if language is specified)
+        language = config.get("language")
+        if language and language in LANGUAGE_DEFAULTS:
+            lang_defaults = LANGUAGE_DEFAULTS[language]
+            for key, value in lang_defaults.items():
+                # Only apply language default if user didn't specify
+                if key not in svc and value is not None:
+                    config[key] = value
+
+            # Map runtime_version → php_version for PHP backward compatibility
+            if language == "php":
+                if "runtime_version" in svc and "php_version" not in svc:
+                    config["php_version"] = svc["runtime_version"]
+                if "php_version" in svc and "runtime_version" not in svc:
+                    config["runtime_version"] = svc["php_version"]
+
         # Build document_root
         suffix = config.get("document_root_suffix", "").strip("/")
         if suffix:
@@ -151,22 +170,27 @@ class ConfigParser:
         else:
             config["document_root"] = config["deploy_path"]
 
-        # Build socket path
-        config["fpm_socket"] = f"/run/php/php{config['php_version']}-fpm-{config['service_name']}.sock"
+        # Build PHP-specific paths (only for PHP or when language not yet detected)
+        if not language or language == "php":
+            php_ver = config.get("php_version", config.get("runtime_version", "8.2"))
+            config["fpm_socket"] = f"/run/php/php{php_ver}-fpm-{config['service_name']}.sock"
+            config["fpm_pool_config"] = (
+                f"/etc/php/{php_ver}/fpm/pool.d/{config['service_name']}.conf"
+            )
 
-        # Build pool config path
-        config["fpm_pool_config"] = (
-            f"/etc/php/{config['php_version']}/fpm/pool.d/{config['service_name']}.conf"
-        )
+        # Build systemd service name for non-PHP languages
+        if language and language != "php":
+            config["systemd_service"] = f"app-{config['service_name']}"
 
         # Validate individual fields
         self._validate_fields(config, index)
 
-        # Ensure fpm is in extensions
-        if "fpm" not in config["php_extensions"]:
-            config["php_extensions"].append("fpm")
-        if "cli" not in config["php_extensions"]:
-            config["php_extensions"].append("cli")
+        # PHP-specific: Ensure fpm is in extensions
+        if (not language or language == "php") and config.get("php_extensions"):
+            if "fpm" not in config["php_extensions"]:
+                config["php_extensions"].append("fpm")
+            if "cli" not in config["php_extensions"]:
+                config["php_extensions"].append("cli")
 
         return config
 
@@ -234,12 +258,13 @@ class ConfigParser:
         deploy_paths = {}
         service_names = {}
         sockets = {}
+        ports = {}
 
         for svc in services:
             name = svc["service_name"]
             domain = svc["domain"]
             path = svc["deploy_path"]
-            socket = svc["fpm_socket"]
+            language = svc.get("language") or "php"
 
             # Duplicate service names
             if name in service_names:
@@ -264,13 +289,25 @@ class ConfigParser:
                 )
             deploy_paths[path] = name
 
-            # Socket conflicts
-            if socket in sockets:
-                self.errors.append(
-                    f"Socket conflict: '{socket}' used by both "
-                    f"'{sockets[socket]}' and '{name}'"
-                )
-            sockets[socket] = name
+            # PHP: Socket conflicts
+            socket = svc.get("fpm_socket")
+            if socket:
+                if socket in sockets:
+                    self.errors.append(
+                        f"Socket conflict: '{socket}' used by both "
+                        f"'{sockets[socket]}' and '{name}'"
+                    )
+                sockets[socket] = name
+
+            # Non-PHP: Port conflicts
+            app_port = svc.get("app_port")
+            if app_port and language != "php":
+                if app_port in ports:
+                    self.errors.append(
+                        f"Port conflict: port {app_port} used by both "
+                        f"'{ports[app_port]}' and '{name}'"
+                    )
+                ports[app_port] = name
 
     # ── Helpers ──────────────────────────────────────────────────
 

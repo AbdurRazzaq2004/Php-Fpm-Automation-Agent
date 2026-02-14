@@ -1,0 +1,28 @@
+# Java Spring Boot Application Example
+# ======================================
+# Deploys a Java Spring Boot app — builds JAR, runs via systemd, reverse proxy.
+# Auto-detects: JDK version, Maven/Gradle, Spring Boot framework.
+
+global:
+  web_server: nginx
+  enable_ssl: false
+
+services:
+  - service_name: spring-api
+    domain: api.example.com
+    language: java
+    runtime_version: "21"          # JDK version — auto-detected from pom.xml/build.gradle
+    repo_url: https://github.com/your-org/spring-api.git
+    branch: main
+    deploy_path: /var/www/spring-api
+
+    # Optional overrides
+    # app_port: 8080
+    # process_manager: systemd
+    # build_command: "mvn package -DskipTests"           # or "./gradlew build -x test"
+    # start_command: "java -jar target/api-1.0.0.jar"
+
+    environment_vars:
+      SPRING_PROFILES_ACTIVE: production
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://localhost:5432/mydb"

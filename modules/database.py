@@ -296,24 +296,45 @@ class DatabaseManager:
         self.log.warn(f"{preferred} installed but could not start service")
         return True
 
+    def _get_mysql_admin_cmd(self) -> Optional[str]:
+        """Find a working MySQL admin connection command."""
+        for cmd in ["mysql -u root", "sudo mysql"]:
+            rc, _, _ = self._run(f"{cmd} -e 'SELECT 1;' 2>/dev/null")
+            if rc == 0:
+                return cmd
+        return None
+
     def _configure_mysql_root_auth(self):
         """
-        Configure MySQL root user for password-based auth.
+        Verify MySQL root access.
 
-        By default, MySQL 8 on Ubuntu uses auth_socket for root,
-        which prevents PHP apps from connecting as root@localhost.
-        Switch to mysql_native_password with empty password so apps
-        can connect without special socket permissions.
+        We keep auth_socket (Ubuntu default) so admin operations always work
+        via 'sudo mysql'. Apps should use dedicated users, not root.
         """
-        rc, _, _ = self._run(
-            'mysql -u root -e "'
-            "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '';"
-            ' FLUSH PRIVILEGES;"'
-        )
-        if rc == 0:
-            self.log.info("Configured MySQL root for password-based auth")
+        admin_cmd = self._get_mysql_admin_cmd()
+        if admin_cmd:
+            self.log.info(f"MySQL root accessible via: {admin_cmd.split()[0]}")
         else:
-            self.log.warn("Could not configure MySQL root auth — apps may need manual DB user setup")
+            self.log.warn("Cannot access MySQL as root — trying auth reset...")
+            # Last resort: reset via skip-grant-tables
+            import time
+            self._run("systemctl stop mysql 2>/dev/null; systemctl stop mysqld 2>/dev/null")
+            self._run("mysqld_safe --skip-grant-tables --skip-networking &")
+            time.sleep(3)
+            self._run(
+                'mysql -u root -e "FLUSH PRIVILEGES; '
+                "ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket; "
+                'FLUSH PRIVILEGES;"'
+            )
+            self._run("mysqladmin shutdown 2>/dev/null")
+            time.sleep(1)
+            self._run("systemctl start mysql 2>/dev/null; systemctl start mysqld 2>/dev/null")
+            time.sleep(2)
+            admin_cmd = self._get_mysql_admin_cmd()
+            if admin_cmd:
+                self.log.info("MySQL root access restored")
+            else:
+                self.log.warn("Could not restore MySQL root access")
 
     def _ensure_postgresql(self, installed_dbs: Dict) -> bool:
         """
@@ -620,17 +641,20 @@ class DatabaseManager:
         """
         Create MySQL database and user with proper permissions.
 
-        Steps:
-        1. Create database (IF NOT EXISTS)
-        2. Create user with password (if not root)
-        3. Grant all privileges
+        Uses _get_mysql_admin_cmd() for reliable admin access.
+        Always creates a dedicated app user (never alters root password).
         """
         user = user or "root"
+        admin_cmd = self._get_mysql_admin_cmd()
+        if not admin_cmd:
+            self.log.error("Cannot connect to MySQL as admin — provision failed")
+            return False
+
         self.log.info(f"MySQL: ensuring database '{dbname}' with user '{user}'")
 
         # Step 1: Create database
         rc, _, err = self._run(
-            f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{dbname}`;'"
+            f"{admin_cmd} -e 'CREATE DATABASE IF NOT EXISTS `{dbname}`;'"
         )
         if rc == 0:
             self.log.info(f"MySQL database '{dbname}' ready")
@@ -638,29 +662,40 @@ class DatabaseManager:
             self.log.error(f"Failed to create MySQL database '{dbname}': {err}")
             return False
 
-        # Step 2/3: Create non-root user and grant privileges
-        if user and user != "root":
-            pwd_clause = f"IDENTIFIED BY '{password}'" if password else ""
-            # CREATE USER IF NOT EXISTS (MySQL 5.7+)
-            rc, _, _ = self._run(
-                f"mysql -u root -e \"CREATE USER IF NOT EXISTS '{user}'@'localhost' {pwd_clause};\""
-            )
-            if rc == 0:
-                self.log.info(f"MySQL user '{user}' ready")
+        # Step 2: Create app user with password and grant privileges
+        if user and password:
+            pwd_clause = f"IDENTIFIED BY '{password}'"
+            # Always create/update user with password (works for both root and non-root)
+            if user == "root":
+                # For root: set password via ALTER USER
+                self._run(
+                    f'{admin_cmd} -e "ALTER USER \'root\'@\'localhost\' '
+                    f"IDENTIFIED WITH mysql_native_password BY '{password}'; "
+                    f'FLUSH PRIVILEGES;"'
+                )
+                self.log.info("Set MySQL root password from app config")
             else:
-                self.log.warn(f"Could not create MySQL user '{user}'")
-
-            # Grant privileges
+                # For non-root: CREATE USER + GRANT
+                self._run(
+                    f'{admin_cmd} -e "CREATE USER IF NOT EXISTS '
+                    f"'{user}'@'localhost' {pwd_clause}; "
+                    f'FLUSH PRIVILEGES;"'
+                )
+                self._run(
+                    f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON `{dbname}`.* '
+                    f"TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
+                )
+                self.log.info(f"MySQL user '{user}' ready with full privileges on '{dbname}'")
+        elif user and user != "root":
+            # Non-root user without password
             self._run(
-                f"mysql -u root -e \"GRANT ALL PRIVILEGES ON \\`{dbname}\\`.* TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
+                f'{admin_cmd} -e "CREATE USER IF NOT EXISTS '
+                f"'{user}'@'localhost'; FLUSH PRIVILEGES;\""
             )
-            self.log.info(f"Granted all privileges on '{dbname}' to '{user}'")
-        elif user == "root" and password:
-            # Set root password if specified by the app
             self._run(
-                f"mysql -u root -e \"ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{password}'; FLUSH PRIVILEGES;\""
+                f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON `{dbname}`.* '
+                f"TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
             )
-            self.log.info("Set MySQL root password from app config")
 
         self.log.success(f"MySQL database '{dbname}' ready for user '{user}'")
         return True

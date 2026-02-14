@@ -475,11 +475,12 @@ class UniversalDeployer:
 
                 if db_driver == "mysql" and (sql_files or db_names):
                     log.step("Auto-importing MySQL schema files")
+                    mysql_admin = db_mgr._get_mysql_admin_cmd() or "mysql -u root"
                     for db_name in db_names:
                         if db_name != target_db:
                             log.info(f"Creating database: {db_name}")
                             subprocess.run(
-                                f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{db_name}`;'",
+                                f"{mysql_admin} -e 'CREATE DATABASE IF NOT EXISTS `{db_name}`;'",
                                 shell=True, capture_output=True
                             )
                     import_db = target_db or (db_names[0] if db_names else None)
@@ -493,7 +494,7 @@ class UniversalDeployer:
                         use_db = file_target_db or import_db
                         if use_db:
                             rc = subprocess.run(
-                                f"grep -iv 'create database' '{sql_file}' | mysql -u root {use_db}",
+                                f"grep -iv 'create database' '{sql_file}' | {mysql_admin} {use_db}",
                                 shell=True, capture_output=True
                             )
                             if rc.returncode == 0:
@@ -705,6 +706,10 @@ class UniversalDeployer:
             db_engine = "mysql"
             db_user = db_credentials.get("user", "root")
             db_port = db_credentials.get("port", "3306")
+            # Avoid using root as app user — create a dedicated user
+            if db_user == "root":
+                db_user = f"app_{db_name}"
+                log.info(f"Using dedicated MySQL user '{db_user}' instead of root")
 
         # Store the generated password so provision_database can use it
         if "password" not in db_credentials or not db_credentials.get("password"):

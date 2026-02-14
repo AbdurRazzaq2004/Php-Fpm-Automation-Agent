@@ -683,18 +683,21 @@ class DatabaseManager:
             self.log.info("App uses root user — skipping user creation (DB already created)")
         elif user and password:
             # Non-root: CREATE USER + GRANT
+            # Use mysql_native_password for broad driver compatibility (mysql2, PDO, etc.)
             self._run(
                 f'{admin_cmd} -e "CREATE USER IF NOT EXISTS '
-                f"'{user}'@'localhost' IDENTIFIED BY '{password}'; "
+                f"'{user}'@'localhost' IDENTIFIED WITH mysql_native_password BY '{password}'; "
                 f'FLUSH PRIVILEGES;"'
             )
-            # Update password in case user already exists with different password
+            # Update password/plugin in case user already exists with different settings
             self._run(
                 f'{admin_cmd} -e "ALTER USER \'{user}\'@\'localhost\' '
-                f"IDENTIFIED BY '{password}'; FLUSH PRIVILEGES;\""
+                f"IDENTIFIED WITH mysql_native_password BY '{password}'; FLUSH PRIVILEGES;\""
             )
+            # NOTE: backticks MUST be escaped as \` inside double-quoted shell strings,
+            # otherwise bash treats them as command substitution.
             self._run(
-                f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON `{dbname}`.* '
+                f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON \\`{dbname}\\`.* '
                 f"TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
             )
             self.log.info(f"MySQL user '{user}' ready with full privileges on '{dbname}'")
@@ -705,7 +708,7 @@ class DatabaseManager:
                 f"'{user}'@'localhost'; FLUSH PRIVILEGES;\""
             )
             self._run(
-                f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON `{dbname}`.* '
+                f'{admin_cmd} -e "GRANT ALL PRIVILEGES ON \\`{dbname}\\`.* '
                 f"TO '{user}'@'localhost'; FLUSH PRIVILEGES;\""
             )
 

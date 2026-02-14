@@ -56,7 +56,7 @@ RUNTIME_REGISTRY = {
 }
 
 
-def get_runtime(language: str, log, os_info: dict) -> BaseRuntime:
+def get_runtime(language: str, log, system) -> BaseRuntime:
     """Factory: return the runtime instance for a given language.
 
     Raises ValueError for unsupported languages.
@@ -68,4 +68,4 @@ def get_runtime(language: str, log, os_info: dict) -> BaseRuntime:
             f"Unsupported language: '{language}'. "
             f"Supported: php, {', '.join(RUNTIME_REGISTRY.keys())}"
         )
-    return runtime_cls(log=log, os_info=os_info)
+    return runtime_cls(system=system, log=log)

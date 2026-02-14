@@ -206,7 +206,7 @@ class UniversalDeployer:
                     "arch": platform.machine(),
                     "pkg_manager": system.detect_package_manager(),
                 }
-                runtime = get_runtime(language, log, os_info)
+                runtime = get_runtime(language, log, system)
                 proc_mgr = ProcessManager(log, os_info)
 
             web_server = config.get("web_server", "nginx")
@@ -286,7 +286,7 @@ class UniversalDeployer:
                         "arch": platform.machine(),
                         "pkg_manager": system.detect_package_manager(),
                     }
-                    runtime = get_runtime(language, log, os_info)
+                    runtime = get_runtime(language, log, system)
                     proc_mgr = ProcessManager(log, os_info)
 
             log.banner("AUTO-DETECTING APP REQUIREMENTS")

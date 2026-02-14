@@ -30,6 +30,7 @@ License: MIT
 import argparse
 import os
 import re
+import platform
 import subprocess
 import sys
 import traceback
@@ -198,11 +199,12 @@ class UniversalDeployer:
             runtime = None
             proc_mgr = None
             if language != "php":
+                _os = system.detect_os()
                 os_info = {
-                    "distro": system.distro,
-                    "distro_version": system.distro_version,
-                    "arch": system.arch,
-                    "pkg_manager": system.pkg_manager,
+                    "distro": _os.get("distro", "unknown"),
+                    "distro_version": _os.get("version", "unknown"),
+                    "arch": platform.machine(),
+                    "pkg_manager": system.detect_package_manager(),
                 }
                 runtime = get_runtime(language, log, os_info)
                 proc_mgr = ProcessManager(log, os_info)
@@ -277,11 +279,12 @@ class UniversalDeployer:
 
                 # Re-instantiate runtime if language changed from auto
                 if language != "php":
+                    _os = system.detect_os()
                     os_info = {
-                        "distro": system.distro,
-                        "distro_version": system.distro_version,
-                        "arch": system.arch,
-                        "pkg_manager": system.pkg_manager,
+                        "distro": _os.get("distro", "unknown"),
+                        "distro_version": _os.get("version", "unknown"),
+                        "arch": platform.machine(),
+                        "pkg_manager": system.detect_package_manager(),
                     }
                     runtime = get_runtime(language, log, os_info)
                     proc_mgr = ProcessManager(log, os_info)

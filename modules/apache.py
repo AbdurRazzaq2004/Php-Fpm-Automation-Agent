@@ -6,6 +6,7 @@ event MPM, proxy_fcgi, and PHP-FPM integration.
 """
 
 import os
+import re
 import subprocess
 from typing import Dict, Tuple
 
@@ -35,7 +36,7 @@ class ApacheConfigurator:
 
 <VirtualHost *:80>
     ServerName {domain}
-    ServerAlias www.{domain}
+{server_alias_line}
     ServerAdmin webmaster@{domain}
 
     DocumentRoot {document_root}
@@ -54,6 +55,9 @@ class ApacheConfigurator:
         Options -Indexes +FollowSymLinks -MultiViews
         AllowOverride All
         Require all granted
+
+        # Enable PATH_INFO for MVC frameworks (e.g., /index.php/controller/action)
+        AcceptPathInfo On
 
         # URL rewriting (like mod_rewrite for Laravel/WP)
         <IfModule mod_rewrite.c>
@@ -152,7 +156,7 @@ class ApacheConfigurator:
 
 <VirtualHost *:443>
     ServerName {domain}
-    ServerAlias www.{domain}
+{server_alias_line}
     ServerAdmin webmaster@{domain}
 
     DocumentRoot {document_root}
@@ -179,6 +183,9 @@ class ApacheConfigurator:
         AllowOverride All
         Require all granted
 
+        # Enable PATH_INFO for MVC frameworks
+        AcceptPathInfo On
+
         <IfModule mod_rewrite.c>
             RewriteEngine On
             RewriteCond %{{REQUEST_FILENAME}} !-d
@@ -197,20 +204,28 @@ class ApacheConfigurator:
         Header always unset X-Powered-By
     </IfModule>
 
+    # ── Deny Hidden Files ───────────────────────────────────
     <DirectoryMatch "/\\.">
         Require all denied
     </DirectoryMatch>
 
+    # ── Deny Sensitive Files ────────────────────────────────
     <FilesMatch "^\\.(env|git|htaccess|htpasswd)">
         Require all denied
     </FilesMatch>
 
+    <FilesMatch "(composer\\.json|composer\\.lock|package\\.json|package-lock\\.json)$">
+        Require all denied
+    </FilesMatch>
+
+    # ── Deny PHP in Uploads ─────────────────────────────────
     <DirectoryMatch "/(?:uploads|files)/">
         <FilesMatch "\\.php$">
             Require all denied
         </FilesMatch>
     </DirectoryMatch>
 
+    # ── Static Asset Caching ────────────────────────────────
     <IfModule mod_expires.c>
         ExpiresActive On
         ExpiresByType text/css "access plus 1 month"
@@ -224,6 +239,9 @@ class ApacheConfigurator:
     <IfModule mod_deflate.c>
         AddOutputFilterByType DEFLATE text/plain text/css text/javascript text/xml application/json application/javascript application/xml image/svg+xml
     </IfModule>
+
+    # ── Upload Size Limit ───────────────────────────────────
+    LimitRequestBody {max_upload_bytes}
 
 {extra_config}
 </VirtualHost>
@@ -239,6 +257,34 @@ class ApacheConfigurator:
             cmd, shell=True, capture_output=True, text=True, timeout=60
         )
         return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+    def _enable_required_modules(self):
+        """
+        Enable required Apache modules for PHP-FPM proxy setup.
+        Only applies to Debian/Ubuntu (a2enmod). On RHEL, modules
+        are loaded via config files and typically available by default.
+        """
+        if self.os_info["family"] != "debian":
+            return
+
+        required_modules = [
+            "proxy_fcgi",   # PHP-FPM proxy
+            "rewrite",      # URL rewriting (Laravel, WP, etc.)
+            "headers",      # Security headers
+            "expires",      # Static asset caching
+            "deflate",      # Gzip compression
+            "ssl",          # SSL/TLS support
+            "setenvif",     # ProxyFCGI env vars
+        ]
+
+        enabled = []
+        for mod in required_modules:
+            rc, _, _ = self._run(f"a2enmod {mod} 2>/dev/null")
+            if rc == 0:
+                enabled.append(mod)
+
+        if enabled:
+            self.log.info(f"Enabled Apache modules: {', '.join(enabled)}")
 
     # ── Paths ───────────────────────────────────────────────────
 
@@ -289,13 +335,21 @@ class ApacheConfigurator:
                 self.log.error("Refusing to overwrite foreign config")
                 return False
 
+        # Ensure required Apache modules are enabled
+        self._enable_required_modules()
+
         # Convert upload size to bytes for Apache LimitRequestBody
         max_upload = config.get("max_upload_size", "64M")
         max_bytes = self._parse_size_to_bytes(max_upload)
 
+        # Conditional ServerAlias (skip for IP addresses)
+        is_ip = bool(re.match(r'^(\d{1,3}\.){3}\d{1,3}$', domain))
+        server_alias_line = "" if is_ip else f"    ServerAlias www.{domain}"
+
         tmpl_vars = {
             "service_name": service_name,
             "domain": domain,
+            "server_alias_line": server_alias_line,
             "php_version": config["php_version"],
             "fpm_socket": config["fpm_socket"],
             "document_root": config["document_root"],

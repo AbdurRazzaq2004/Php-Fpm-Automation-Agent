@@ -23,6 +23,7 @@ License: MIT
 
 import argparse
 import os
+import re
 import sys
 import traceback
 from typing import Dict, List, Optional
@@ -326,13 +327,14 @@ class PHPDeployer:
                 sql_files = framework_info.get("sql_files", [])
                 db_names = framework_info.get("database_names", [])
 
+                import subprocess as _sp
+
                 if db_driver == "mysql" and (sql_files or db_names):
-                    log.step("Auto-importing SQL schema files")
+                    log.step("Auto-importing MySQL schema files")
 
                     # Create databases first (safe: IF NOT EXISTS)
                     for db_name in db_names:
                         log.info(f"Creating database: {db_name}")
-                        import subprocess as _sp
                         _sp.run(
                             f"mysql -u root -e 'CREATE DATABASE IF NOT EXISTS `{db_name}`;'",
                             shell=True, capture_output=True
@@ -363,6 +365,35 @@ class PHPDeployer:
                             )
                             if rc.returncode == 0:
                                 log.success(f"  ✓ Imported {fname} → {db_names[0]}")
+
+                elif db_driver in ("pgsql", "postgres") and sql_files:
+                    log.step("Auto-importing PostgreSQL schema files")
+
+                    # Detect target database from config files
+                    pgsql_db = self._detect_pgsql_dbname(config["deploy_path"])
+
+                    for sql_file in sql_files:
+                        fname = os.path.basename(sql_file)
+                        log.info(f"Importing SQL: {fname}")
+                        if pgsql_db:
+                            rc = _sp.run(
+                                f"sudo -u postgres psql -d {pgsql_db} -f '{sql_file}'",
+                                shell=True, capture_output=True
+                            )
+                        else:
+                            rc = _sp.run(
+                                f"sudo -u postgres psql -f '{sql_file}'",
+                                shell=True, capture_output=True
+                            )
+                        if rc.returncode == 0:
+                            log.success(f"  ✓ Imported {fname}" + (f" → {pgsql_db}" if pgsql_db else ""))
+                        else:
+                            err_msg = rc.stderr.decode()[:200] if rc.stderr else "unknown"
+                            # Ignore "already exists" style errors
+                            if "already exists" in err_msg.lower():
+                                log.info(f"  ⊘ {fname}: tables already exist — skipped")
+                            else:
+                                log.warn(f"  SQL import had issues: {err_msg}")
 
             # ── Deploy environment file ─────────────────────────
             hooks.setup_environment_file(config)
@@ -463,6 +494,57 @@ class PHPDeployer:
             log.critical(f"Unexpected error: {e}")
             log.debug(traceback.format_exc())
             return self._handle_failure(backup, log)
+
+    def _detect_pgsql_dbname(self, deploy_path: str) -> Optional[str]:
+        """
+        Detect PostgreSQL database name from config files.
+
+        Searches for common patterns:
+        - DSN: pgsql:...;dbname=xxx
+        - Config arrays: 'dbname' => 'xxx'
+        - Environment: DB_NAME=xxx
+        """
+        import glob as _glob
+
+        scan_files = []
+        config_dir = os.path.join(deploy_path, "config")
+        if os.path.isdir(config_dir):
+            scan_files.extend(_glob.glob(os.path.join(config_dir, "*.php")))
+
+        for d in ["src", "app"]:
+            d_path = os.path.join(deploy_path, d)
+            if os.path.isdir(d_path):
+                for root, dirs, files in os.walk(d_path):
+                    for f in files:
+                        if f.endswith(".php") and any(kw in f.lower() for kw in ["database", "db", "connection"]):
+                            scan_files.append(os.path.join(root, f))
+                    depth = root.replace(d_path, "").count(os.sep)
+                    if depth >= 3:
+                        dirs.clear()
+
+        for env_name in [".env", ".env.production"]:
+            env_path = os.path.join(deploy_path, env_name)
+            if os.path.isfile(env_path):
+                scan_files.append(env_path)
+
+        for fpath in scan_files:
+            try:
+                with open(fpath, "r", errors="ignore") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            # pgsql:...;dbname=xxx
+            m = re.search(r'dbname[=:]\s*[\'"]?(\w+)', content)
+            if m:
+                return m.group(1)
+
+            # DB_NAME=xxx
+            m = re.search(r'DB_NAME\s*=\s*[\'"]?(\w+)', content)
+            if m:
+                return m.group(1)
+
+        return None
 
     def _handle_failure(self, backup: BackupManager, log: DeployLogger) -> bool:
         """Handle deployment failure with rollback."""

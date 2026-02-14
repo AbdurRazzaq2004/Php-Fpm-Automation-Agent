@@ -665,17 +665,18 @@ class AppAutoDetector:
             for php_file in glob.glob(os.path.join(config_dir, "*.php")):
                 scan_files.append(php_file)
 
-        # Also check app/ directory (first level only) for database classes
-        app_dir = os.path.join(path, "app")
-        if os.path.isdir(app_dir):
-            for root, dirs, files in os.walk(app_dir):
-                for f in files:
-                    if f.endswith(".php") and any(kw in f.lower() for kw in ["database", "db", "connection"]):
-                        scan_files.append(os.path.join(root, f))
-                # Limit depth to 3 levels
-                depth = root.replace(app_dir, "").count(os.sep)
-                if depth >= 3:
-                    dirs.clear()
+        # Also check app/ and src/ directories for database classes
+        for scan_dir_name in ["app", "src"]:
+            scan_dir = os.path.join(path, scan_dir_name)
+            if os.path.isdir(scan_dir):
+                for root, dirs, files in os.walk(scan_dir):
+                    for f in files:
+                        if f.endswith(".php") and any(kw in f.lower() for kw in ["database", "db", "connection"]):
+                            scan_files.append(os.path.join(root, f))
+                    # Limit depth to 3 levels
+                    depth = root.replace(scan_dir, "").count(os.sep)
+                    if depth >= 3:
+                        dirs.clear()
 
         # Read and scan all collected files
         combined_content = ""

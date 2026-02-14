@@ -34,7 +34,7 @@ SERVICE_DEFAULTS: Dict[str, Any] = {
     "branch": "main",
     "php_version": "8.2",       # Will be overridden by auto-detection
     "web_server": "nginx",
-    "php_extensions": ["cli", "fpm", "common", "curl", "mbstring", "xml", "zip", "mysql", "opcache"],
+    "php_extensions": ["cli", "fpm", "common", "curl", "mbstring", "xml", "zip", "opcache"],
     "enable_ssl": False,
     "auto_detect": True,        # Auto-detect PHP version, framework, DB, extensions
     "user": None,               # Will be auto-generated: svc_<service_name>

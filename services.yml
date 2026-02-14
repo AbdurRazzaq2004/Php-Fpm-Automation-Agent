@@ -1,19 +1,19 @@
 # =============================================================================
-# PHP-FPM Automation Agent — Deployment Config
+# Universal Deployment Agent — Deployment Config
 # =============================================================================
 # Just provide the basics — the agent auto-detects everything else:
-#   ✓ PHP version (from composer.json)
-#   ✓ Document root (/public, /web, etc.)
-#   ✓ PHP extensions needed
+#   ✓ Language & runtime version
+#   ✓ Framework (Flask, Django, Laravel, Express, etc.)
 #   ✓ Database type (MySQL/PostgreSQL/SQLite) & auto-installs it
-#   ✓ SQL schema files → auto-creates databases & imports tables
-#   ✓ Composer install (latest from getcomposer.org)
-#   ✓ Framework-specific commands (Laravel artisan, etc.)
+#   ✓ Dependencies (pip, npm, composer, etc.)
+#   ✓ Process manager (systemd, PM2, PHP-FPM)
+#   ✓ Web server config (reverse proxy / FastCGI)
 # =============================================================================
 
-service_name: todo-php
+service_name: todo-python
 domain: 98.81.165.46
-repo_url: https://github.com/AbdurRazzaq2004/sample-php-app-for-automationTest.git
+language: python
+repo_url: https://github.com/AbdurRazzaq2004/sample-todoApp-in-pyhton-for-AutomationTest.git
 branch: main
-deploy_path: /var/www/todo-php
+deploy_path: /var/www/todo-python
 web_server: apache

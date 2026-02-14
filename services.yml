@@ -11,9 +11,9 @@
 #   ✓ Framework-specific commands (Laravel artisan, etc.)
 # =============================================================================
 
-service_name: booklist-php
+service_name: todo-php
 domain: 98.81.165.46
-repo_url: https://github.com/Tyn-Tian/Booklist-PHP.git
+repo_url: https://github.com/AbdurRazzaq2004/sample-php-app-for-automationTest.git
 branch: main
-deploy_path: /var/www/booklist-php
+deploy_path: /var/www/todo-php
 web_server: nginx

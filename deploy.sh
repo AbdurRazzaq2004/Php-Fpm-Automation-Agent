@@ -72,7 +72,11 @@ if [ ! -f "${CONFIG_FILE}" ]; then
 fi
 
 # ── Default to "deploy" if no command given ────────────────────
-COMMAND="${1:-deploy}"
+if [ $# -eq 0 ]; then
+    ARGS="deploy"
+else
+    ARGS="$@"
+fi
 
 # ── Run the deployer container ─────────────────────────────────
 echo -e "${GREEN}Running PHP-FPM Automation Agent (Docker mode)...${NC}"
@@ -85,4 +89,4 @@ docker run --rm \
     -v /:/host \
     -v "${CONFIG_FILE}":/app/services.yml \
     "${IMAGE_NAME}" \
-    "$@"
+    ${ARGS}

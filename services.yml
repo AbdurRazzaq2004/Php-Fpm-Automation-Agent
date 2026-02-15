@@ -24,7 +24,7 @@
 # =============================================================================
 
 service_name: todo-mern
-domain: 98.81.165.46
+domain: 54.91.12.14
 language: node
 repo_url: https://github.com/AbdurRazzaq2004/todo-SampleApp-MERN-Stack-For-AutomationTest.git
 branch: main

@@ -29,9 +29,31 @@ NC='\033[0m'
 
 # ── Check prerequisites ────────────────────────────────────────
 if ! command -v docker &>/dev/null; then
-    echo -e "${RED}Error: Docker is not installed.${NC}"
-    echo "Install Docker: https://docs.docker.com/engine/install/"
-    exit 1
+    echo -e "${CYAN}Docker not found. Installing Docker Engine...${NC}"
+    # Detect OS
+    . /etc/os-release 2>/dev/null || true
+    OS_ID="${ID:-ubuntu}"
+    CODENAME="${VERSION_CODENAME:-noble}"
+
+    # Install Docker via official repo
+    apt-get update -y 2>/dev/null && apt-get install -y ca-certificates curl gnupg 2>/dev/null
+    install -m 0755 -d /etc/apt/keyrings 2>/dev/null
+    curl -fsSL "https://download.docker.com/linux/${OS_ID}/gpg" | \
+        gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null || true
+    chmod a+r /etc/apt/keyrings/docker.gpg 2>/dev/null
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${OS_ID} ${CODENAME} stable" | \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null 2>/dev/null
+    apt-get update -y 2>/dev/null
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null
+    systemctl start docker 2>/dev/null || true
+    systemctl enable docker 2>/dev/null || true
+
+    if ! command -v docker &>/dev/null; then
+        echo -e "${RED}Error: Docker auto-install failed.${NC}"
+        echo "Install Docker manually: https://docs.docker.com/engine/install/"
+        exit 1
+    fi
+    echo -e "${GREEN}Docker installed successfully!${NC}"
 fi
 
 # ── Build image if it doesn't exist ────────────────────────────

@@ -199,6 +199,13 @@ class PackageInstaller:
         """Install Nginx if not already present."""
         self.log.step("Checking Nginx installation")
 
+        # Stop Apache if running — it conflicts on port 80
+        if self.system.is_apache_running():
+            cmd = self.system.get_apache_command()
+            self.log.info(f"Stopping {cmd} (port 80 conflict with Nginx)")
+            self._run(f"systemctl stop {cmd}")
+            self._run(f"systemctl disable {cmd}")
+
         if self.system.is_nginx_installed():
             version = self.system.get_nginx_version()
             self.log.skip(f"Nginx already installed (v{version})")
@@ -222,6 +229,12 @@ class PackageInstaller:
     def install_apache(self) -> bool:
         """Install Apache with event MPM and proxy_fcgi if not present."""
         self.log.step("Checking Apache installation")
+
+        # Stop Nginx if running — it conflicts on port 80
+        if self.system.is_nginx_running():
+            self.log.info("Stopping Nginx (port 80 conflict with Apache)")
+            self._run("systemctl stop nginx")
+            self._run("systemctl disable nginx")
 
         if self.system.is_apache_installed():
             version = self.system.get_apache_version()

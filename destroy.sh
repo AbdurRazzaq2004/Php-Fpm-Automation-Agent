@@ -256,34 +256,41 @@ echo "$SERVICES" | while IFS='|' read -r name domain deploy_path language web_se
         skip "Systemd service: ${systemd_service}.service"
     fi
 
-    # ── 3. Remove web server vhost ──────────────────────────────
+    # ── 3. Remove web server vhosts ─────────────────────────────
+    # Always check BOTH web servers — the config may have changed
+    # since the original deployment (e.g. apache → nginx switch).
     section "Web Server Vhost"
-    if [ "$web_server" = "apache" ] || [ "$web_server" = "both" ]; then
-        if [ -f "/etc/apache2/sites-available/${name}.conf" ]; then
-            run "a2dissite '${name}' || true"
-            run "rm -f '/etc/apache2/sites-available/${name}.conf'"
-            run "rm -f '/etc/apache2/sites-enabled/${name}.conf'"
-            ok "Removed Apache vhost: ${name}.conf"
-        else
-            skip "Apache vhost: ${name}.conf"
-        fi
-        # RHEL path
-        if [ -f "/etc/httpd/conf.d/${name}.conf" ]; then
-            run "rm -f '/etc/httpd/conf.d/${name}.conf'"
-            ok "Removed httpd vhost: ${name}.conf"
-        fi
+    vhost_found=false
+
+    # Apache (Debian/Ubuntu)
+    if [ -f "/etc/apache2/sites-available/${name}.conf" ]; then
+        run "a2dissite '${name}' || true"
+        run "rm -f '/etc/apache2/sites-available/${name}.conf'"
+        run "rm -f '/etc/apache2/sites-enabled/${name}.conf'"
+        ok "Removed Apache vhost: ${name}.conf"
+        vhost_found=true
     fi
-    if [ "$web_server" = "nginx" ] || [ "$web_server" = "both" ]; then
-        if [ -f "/etc/nginx/sites-available/${name}.conf" ]; then
-            run "rm -f '/etc/nginx/sites-enabled/${name}.conf'"
-            run "rm -f '/etc/nginx/sites-available/${name}.conf'"
-            ok "Removed Nginx vhost: ${name}.conf"
-        elif [ -f "/etc/nginx/conf.d/${name}.conf" ]; then
-            run "rm -f '/etc/nginx/conf.d/${name}.conf'"
-            ok "Removed Nginx conf.d: ${name}.conf"
-        else
-            skip "Nginx vhost: ${name}.conf"
-        fi
+    # Apache (RHEL/CentOS)
+    if [ -f "/etc/httpd/conf.d/${name}.conf" ]; then
+        run "rm -f '/etc/httpd/conf.d/${name}.conf'"
+        ok "Removed httpd vhost: ${name}.conf"
+        vhost_found=true
+    fi
+    # Nginx (Debian/Ubuntu)
+    if [ -f "/etc/nginx/sites-available/${name}.conf" ]; then
+        run "rm -f '/etc/nginx/sites-enabled/${name}.conf'"
+        run "rm -f '/etc/nginx/sites-available/${name}.conf'"
+        ok "Removed Nginx vhost: ${name}.conf"
+        vhost_found=true
+    fi
+    # Nginx (RHEL / conf.d)
+    if [ -f "/etc/nginx/conf.d/${name}.conf" ]; then
+        run "rm -f '/etc/nginx/conf.d/${name}.conf'"
+        ok "Removed Nginx conf.d: ${name}.conf"
+        vhost_found=true
+    fi
+    if ! $vhost_found; then
+        skip "No vhosts found for ${name}"
     fi
 
     # ── 4. Remove PHP-FPM pool config ──────────────────────────
